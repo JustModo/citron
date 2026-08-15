@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 var ErrUnknownLanguage = errors.New("unknown language")

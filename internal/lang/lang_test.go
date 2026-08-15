@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // Tests here cover the manifest machinery only, using inline manifests and a stub

@@ -1,6 +1,6 @@
 package api
 
-import "github.com/JustModo/judge/internal/judge"
+import "github.com/JustModo/citron/internal/judge"
 
 // The legacy submission API.
 //

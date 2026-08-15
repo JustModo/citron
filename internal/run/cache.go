@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // CompileCache stores compiled artifacts keyed by the content that produced them.
@@ -118,7 +118,7 @@ func (c *CompileCache) lookup(key string) (Entry, bool) {
 	}, true
 }
 
-const metaFile = ".judge-meta.json"
+const metaFile = ".citron-meta.json"
 
 func (c *CompileCache) build(key string, build func(dir string) (judge.CompileResult, error)) (Entry, error) {
 	staging, err := os.MkdirTemp(c.root, "building-")

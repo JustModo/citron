@@ -1,4 +1,4 @@
-// Package config loads judge.conf into an immutable, validated struct. Nothing
+// Package config loads citron.conf into an immutable, validated struct. Nothing
 // reads configuration after startup; everything is injected from the composition root.
 package config
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // Durations are seconds in the file (matching DESIGN.md) and converted here, so the
@@ -94,7 +94,7 @@ type SubmissionLimits struct {
 type Scheduler struct {
 	MaxConcurrentSubmissions int `toml:"max_concurrent_submissions"`
 	// MaxQueueWaitSec bounds how long a submission waits for a slot. Past it the
-	// judge refuses with 503 instead of holding the connection until the client
+	// Citron refuses with 503 instead of holding the connection until the client
 	// times out having been told nothing.
 	MaxQueueWaitSec float64 `toml:"max_queue_wait_seconds"`
 	ExecutionSlots  int     `toml:"execution_slots"`
@@ -176,7 +176,7 @@ func Default() Config {
 		Sandbox: Sandbox{
 			Driver:        "nsjail",
 			NsjailPath:    "/usr/local/bin/nsjail",
-			CgroupRoot:    "/sys/fs/cgroup/judge",
+			CgroupRoot:    "/sys/fs/cgroup/citron",
 			WorkspaceRoot: "/box",
 			CacheRoot:     "/box/cache",
 			CacheEntries:  256,
@@ -198,7 +198,7 @@ func Default() Config {
 				MaxTestcases: 1000, MaxSourceMB: 1,
 				MaxTotalInputMB: 32, MaxTotalOutputMB: 32,
 				MaxParallelTestcases: 4,
-				// Below the 45s client abort so an overloaded judge still answers.
+				// Below the 45s client abort so an overloaded citron still answers.
 				MaxTotalWallTimeSec: 30,
 			},
 		},
@@ -209,7 +209,7 @@ func Default() Config {
 			MemoryBudgetMB:           1024,
 		},
 		Jobs:      Jobs{MaxAttempts: 2},
-		Queue:     Queue{Driver: "inproc", Stream: "judge:submissions", Group: "judge"},
+		Queue:     Queue{Driver: "inproc", Stream: "citron:submissions", Group: "citron"},
 		Languages: Languages{Path: "configs/languages.toml", RequireToolchains: true},
 		Log:       Log{Level: "info", Format: "json"},
 	}
@@ -278,7 +278,7 @@ func (c Config) Validate() error {
 		// A submission that cannot fit in the budget would block forever at admission.
 		{c.Scheduler.MemoryBudgetMB >= c.Limits.Execution.MemoryMB,
 			"scheduler.memory_budget_mb must be >= limits.execution.memory_mb"},
-		// The judge must answer before the client gives up.
+		// Citron must answer before the client gives up.
 		{c.Limits.Submission.MaxTotalWallTimeSec <= c.Server.WriteTimeoutSec,
 			"limits.submission.max_total_wall_time_seconds must be <= server.write_timeout_seconds"},
 	}

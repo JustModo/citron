@@ -13,7 +13,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 type Manifest struct {
@@ -67,7 +67,7 @@ func (ml ManifestLimits) Apply(l judge.Limits) judge.Limits {
 }
 
 // renderCtx holds every value a manifest template may reference. All of it is
-// judge-controlled: filenames come from the manifest or a sanitized hook, numbers
+// citron-controlled: filenames come from the manifest or a sanitized hook, numbers
 // from configuration. Submitted source never reaches a template.
 type renderCtx struct {
 	Source  string

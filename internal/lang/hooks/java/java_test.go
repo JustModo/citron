@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JustModo/judge/internal/lang"
+	"github.com/JustModo/citron/internal/lang"
 )
 
 var manifest = lang.Manifest{Source: "Main.java", Binary: "Main"}

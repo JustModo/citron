@@ -2,13 +2,13 @@
 
 // Package security checks that a hostile submission cannot reach past the sandbox.
 //
-// These run against a live judge, because the thing under test is the interaction
+// These run against a live citron, because the thing under test is the interaction
 // between nsjail, the cgroup and the kernel — none of which a unit test can stand in
 // for. Start one with:
 //
 //	make security
 //
-// Each case asserts a specific contained outcome. "Did not crash the judge" is not a
+// Each case asserts a specific contained outcome. "Did not crash citron" is not a
 // pass: a submission that reads /etc/shadow and exits 0 would satisfy that.
 package security
 
@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-var judgeURL = envOr("JUDGE_URL", "http://127.0.0.1:2358")
+var citronURL = envOr("CITRON_URL", "http://127.0.0.1:2358")
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -68,9 +68,9 @@ func submit(t *testing.T, languageID int, source string) (submissionResult, test
 	}
 
 	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Post(judgeURL+"/submissions", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(citronURL+"/submissions", "application/json", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("judge unreachable at %s: %v", judgeURL, err)
+		t.Fatalf("citron unreachable at %s: %v", citronURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -111,8 +111,8 @@ while True:
 	}
 	t.Logf("fork bomb contained in %v as %q", elapsed, tc.Status.Description)
 
-	// The judge must still be serving afterwards.
-	assertJudgeAlive(t)
+	// Citron must still be serving afterwards.
+	assertCitronAlive(t)
 }
 
 func TestMemoryBombIsKilledAtTheLimit(t *testing.T) {
@@ -130,7 +130,7 @@ while True:
 		t.Errorf("peak memory %d KB far exceeds the 256 MB limit", tc.MemoryKB)
 	}
 	t.Logf("memory bomb: %q at %d KB", tc.Status.Description, tc.MemoryKB)
-	assertJudgeAlive(t)
+	assertCitronAlive(t)
 }
 
 func TestCPULoopHitsTheTimeLimit(t *testing.T) {
@@ -162,11 +162,11 @@ while True:
 		t.Error("output bomb was accepted")
 	}
 	t.Logf("output bomb: %q, %d bytes captured", tc.Status.Description, len(tc.Stdout))
-	assertJudgeAlive(t)
+	assertCitronAlive(t)
 }
 
 // Nothing bounds a file-writing loop except the tmpfs size and RLIMIT_FSIZE. Without
-// them a submission fills the host disk, which takes down far more than the judge.
+// them a submission fills the host disk, which takes down far more than citron.
 func TestFileBombCannotFillTheDisk(t *testing.T) {
 	_, tc := submit(t, langPython, `
 with open("/tmp/fill", "wb") as f:
@@ -177,7 +177,7 @@ with open("/tmp/fill", "wb") as f:
 		t.Error("file bomb was accepted")
 	}
 	t.Logf("file bomb: %q", tc.Status.Description)
-	assertJudgeAlive(t)
+	assertCitronAlive(t)
 }
 
 // --- isolation ---
@@ -207,14 +207,14 @@ print("CONNECTED")
 	}
 }
 
-// The judge's own API must be unreachable from inside a submission.
-func TestCannotReachTheJudgeItself(t *testing.T) {
+// Citron's own API must be unreachable from inside a submission.
+func TestCannotReachCitronItself(t *testing.T) {
 	_, tc := submit(t, langPython, `
 import urllib.request
 print(urllib.request.urlopen("http://127.0.0.1:2358/languages", timeout=3).read()[:50])
 `)
 	if strings.Contains(tc.Stdout, "python") || strings.Contains(tc.Stdout, "id") {
-		t.Errorf("a submission reached the judge's own API: %q", tc.Stdout)
+		t.Errorf("a submission reached citron's own API: %q", tc.Stdout)
 	}
 }
 
@@ -226,7 +226,7 @@ func TestCannotReadSensitiveFiles(t *testing.T) {
 	for _, path := range []string{
 		"/etc/shadow",
 		"/sys/fs/cgroup/cgroup.procs",
-		"/opt/judge/configs/judge.conf",
+		"/opt/citron/configs/citron.conf",
 		"/box/cache",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -245,20 +245,20 @@ except Exception as e:
 	}
 }
 
-// The judge's configuration carries the auth token and internal paths. A submission
+// Citron's configuration carries the auth token and internal paths. A submission
 // must not be able to walk out of its workspace to find it.
 func TestPathTraversalCannotEscapeTheWorkspace(t *testing.T) {
 	_, tc := submit(t, langPython, `
 import os
 found = []
 for depth in range(1, 8):
-    p = "../" * depth + "opt/judge/configs/judge.conf"
+    p = "../" * depth + "opt/citron/configs/citron.conf"
     if os.path.exists(p):
         found.append(p)
 print("FOUND" if found else "NONE", found)
 `)
 	if strings.Contains(tc.Stdout, "FOUND") {
-		t.Errorf("path traversal reached the judge's configuration: %q", tc.Stdout)
+		t.Errorf("path traversal reached citron's configuration: %q", tc.Stdout)
 	}
 }
 
@@ -342,7 +342,7 @@ sys.exit(0)
 		t.Errorf("a later submission took %v; an orphan is probably still running", d)
 	}
 	if quick.Status.Description != "Wrong Answer" && quick.Status.Description != "Accepted" {
-		t.Errorf("judge unhealthy after the orphan test: %q", quick.Status.Description)
+		t.Errorf("citron unhealthy after the orphan test: %q", quick.Status.Description)
 	}
 }
 
@@ -352,19 +352,19 @@ import os
 for k, v in os.environ.items():
     print(k, "=", v)
 `)
-	for _, leak := range []string{"TOKEN", "SECRET", "PASSWORD", "AWS_", "REDIS", "JUDGE_"} {
+	for _, leak := range []string{"TOKEN", "SECRET", "PASSWORD", "AWS_", "REDIS", "CITRON_"} {
 		if strings.Contains(strings.ToUpper(tc.Stdout), leak) {
 			t.Errorf("environment leaked %q: %q", leak, tc.Stdout)
 		}
 	}
 }
 
-func assertJudgeAlive(t *testing.T) {
+func assertCitronAlive(t *testing.T) {
 	t.Helper()
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(judgeURL + "/health")
+	resp, err := client.Get(citronURL + "/health")
 	if err != nil {
-		t.Fatalf("judge is not responding after the attack: %v", err)
+		t.Fatalf("citron is not responding after the attack: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

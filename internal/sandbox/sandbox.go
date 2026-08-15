@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // Spec is one execution.
@@ -22,7 +22,7 @@ type Spec struct {
 
 	Argv  []string
 	Stdin []byte
-	// Env is passed verbatim. It is never derived from the judge's own environment:
+	// Env is passed verbatim. It is never derived from citron's own environment:
 	// the worker's variables may hold credentials the submission must not see.
 	Env []string
 

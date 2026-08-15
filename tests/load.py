@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Load harness for the judge.
+"""Load harness for citron.
 
 Sends realistic assessment traffic: one submission per virtual user, repeatedly,
 for a fixed duration. Reports throughput and latency percentiles, and separates
-"the judge said no" (503 backpressure, which is correct under overload) from
-"the judge broke" (5xx, timeouts).
+"citron said no" (503 backpressure, which is correct under overload) from
+"citron broke" (5xx, timeouts).
 """
 import argparse, json, statistics, sys, threading, time, urllib.error, urllib.request
 

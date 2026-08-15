@@ -1,4 +1,4 @@
-module github.com/JustModo/judge
+module github.com/JustModo/citron
 
 go 1.26.2
 

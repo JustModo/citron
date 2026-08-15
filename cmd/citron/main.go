@@ -1,4 +1,4 @@
-// Command judge runs the code judge: HTTP API and execution in one process.
+// Command citron runs the code judge: HTTP API and execution in one process.
 //
 // This file is the composition root. Every dependency is constructed here and
 // injected downwards; no package reaches out for a connection, a logger or a
@@ -18,23 +18,23 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JustModo/judge/internal/api"
-	"github.com/JustModo/judge/internal/compare"
-	"github.com/JustModo/judge/internal/config"
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/lang/hooks"
-	"github.com/JustModo/judge/internal/metrics"
-	"github.com/JustModo/judge/internal/run"
-	"github.com/JustModo/judge/internal/sandbox"
-	"github.com/JustModo/judge/internal/sched"
-	"github.com/JustModo/judge/internal/workspace"
+	"github.com/JustModo/citron/internal/api"
+	"github.com/JustModo/citron/internal/compare"
+	"github.com/JustModo/citron/internal/config"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/lang/hooks"
+	"github.com/JustModo/citron/internal/metrics"
+	"github.com/JustModo/citron/internal/run"
+	"github.com/JustModo/citron/internal/sandbox"
+	"github.com/JustModo/citron/internal/sched"
+	"github.com/JustModo/citron/internal/workspace"
 )
 
 // version is set at build time with -ldflags.
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "configs/judge.conf", "path to judge.conf")
+	configPath := flag.String("config", "configs/citron.conf", "path to citron.conf")
 	showLanguages := flag.Bool("languages", false, "probe the configured toolchains and exit")
 	// The config file defaults to loopback, which is right when the binary runs on a
 	// host directly. In a container the network namespace is the boundary, so the
@@ -49,13 +49,13 @@ func main() {
 		return
 	}
 
-	if err := runJudge(*configPath, *showLanguages, *address); err != nil {
-		fmt.Fprintf(os.Stderr, "judge: %v\n", err)
+	if err := runCitron(*configPath, *showLanguages, *address); err != nil {
+		fmt.Fprintf(os.Stderr, "citron: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runJudge(configPath string, showLanguages bool, address string) error {
+func runCitron(configPath string, showLanguages bool, address string) error {
 	// A broken configuration is fatal at startup. It is the one class of error that
 	// should stop the process rather than degrade it.
 	cfg, err := config.Load(configPath)
@@ -168,7 +168,7 @@ func serve(
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("judge listening", "address", cfg.Server.Address)
+		log.Info("citron listening", "address", cfg.Server.Address)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -251,7 +251,7 @@ func newLogger(cfg config.Log) *slog.Logger {
 }
 
 // resolveRelative interprets a path in the config file relative to that file, so the
-// judge can be started from any directory.
+// citron can be started from any directory.
 func resolveRelative(configPath, path string) string {
 	if filepath.IsAbs(path) {
 		return path

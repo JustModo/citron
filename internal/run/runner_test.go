@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustModo/judge/internal/compare"
-	"github.com/JustModo/judge/internal/judge"
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/lang/hooks"
-	"github.com/JustModo/judge/internal/sandbox"
-	"github.com/JustModo/judge/internal/workspace"
+	"github.com/JustModo/citron/internal/compare"
+	"github.com/JustModo/citron/internal/judge"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/lang/hooks"
+	"github.com/JustModo/citron/internal/sandbox"
+	"github.com/JustModo/citron/internal/workspace"
 )
 
 func testRunner(t *testing.T) *Runner {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 func TestAdmissionBoundsConcurrentMemory(t *testing.T) {
@@ -283,9 +283,9 @@ func TestSmallSubmissionsAreNotStarvedByALargeOne(t *testing.T) {
 	<-big
 }
 
-// Under sustained overload the judge must refuse work rather than queue it forever.
+// Under sustained overload citron must refuse work rather than queue it forever.
 // Without this, every client waits out its own timeout having been told nothing —
-// which looks identical to the judge being down.
+// which looks identical to citron being down.
 func TestQueueWaitShedsLoadInsteadOfHangingClients(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
@@ -310,7 +310,7 @@ func TestQueueWaitShedsLoadInsteadOfHangingClients(t *testing.T) {
 }
 
 // A caller that gives up first should see its own cancellation, not a misleading
-// "overloaded" that blames the judge.
+// "overloaded" that blames citron.
 func TestClientCancellationIsNotReportedAsOverload(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)

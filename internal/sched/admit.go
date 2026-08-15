@@ -2,7 +2,7 @@
 //
 // Two separate limits, because they run out for different reasons: memory, which the
 // machine physically has a fixed amount of, and execution slots, which stand in for
-// CPU. Reserving before starting is what keeps the judge off the OOM killer — a
+// CPU. Reserving before starting is what keeps citron off the OOM killer — a
 // process the kernel chooses to kill is not necessarily the one that misbehaved.
 package sched
 
@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // ErrTooLarge means the execution could never be admitted, whatever the machine is
@@ -86,5 +86,5 @@ func (a *Admitter) ReservedMB() int64 { return a.held.Load() }
 // InFlight is how many executions are running.
 func (a *Admitter) InFlight() int64 { return a.inFlight.Load() }
 
-// BudgetMB is the total memory the judge is allowed to commit.
+// BudgetMB is the total memory citron is allowed to commit.
 func (a *Admitter) BudgetMB() int64 { return a.budgetMB }

@@ -1,4 +1,4 @@
-# judge
+# citron
 
 A sandboxed code execution service for competitive programming and automated
 assessment. It accepts a submission and its testcases in one request, compiles once,
@@ -45,7 +45,7 @@ The container needs `cap_add: SYS_ADMIN`, `apparmor=unconfined` and
 For development on a machine without nsjail:
 
 ```sh
-make build && ./bin/judge -config configs/judge.conf
+make build && ./bin/citron -config configs/citron.conf
 ```
 
 That requires `sandbox.driver = "local"` and `sandbox.allow_unsafe_local = true`. The
@@ -92,7 +92,7 @@ This service executes untrusted code.
 
 ## Configuration
 
-[configs/judge.conf](configs/judge.conf) holds every operational setting: limits,
+[configs/citron.conf](configs/citron.conf) holds every operational setting: limits,
 concurrency, sandbox paths and logging. Nothing important is hardcoded.
 
 Scale by raising `execution_slots` and `max_concurrent_submissions` towards the core
@@ -103,7 +103,7 @@ point where returns stop.
 
 | Target | Purpose |
 |---|---|
-| `build` | Build `bin/judge` |
+| `build` | Build `bin/citron` |
 | `test` / `test-race` | Unit tests |
 | `lint` | `go vet` and `gofmt` |
 | `up` / `down` | Start and stop with Compose |
@@ -115,7 +115,7 @@ point where returns stop.
 ## Layout
 
 ```
-cmd/judge          composition root; dependencies are built and injected here
+cmd/citron         composition root; dependencies are built and injected here
 internal/judge     domain model, standard library only
 internal/config    configuration loading and validation
 internal/lang      language registry and manifests

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/lang/hooks"
-	"github.com/JustModo/judge/internal/sched"
+	"github.com/JustModo/citron/internal/judge"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/lang/hooks"
+	"github.com/JustModo/citron/internal/sched"
 )
 
 type fakeSubmitter struct {
@@ -80,7 +80,7 @@ func post(t *testing.T, h http.Handler, url, body string) *httptest.ResponseReco
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
 // The exact request the existing consumer sends today, and the exact fields it reads
-// back. If this test fails, pointing that consumer at this judge breaks.
+// back. If this test fails, pointing that consumer at this citron breaks.
 func TestLegacyGoldenRequest(t *testing.T) {
 	sub := &fakeSubmitter{result: judge.SubmissionResult{
 		Status:  judge.StatusAccepted,
@@ -144,7 +144,7 @@ func TestLegacyGoldenRequest(t *testing.T) {
 		t.Error("token is empty")
 	}
 
-	// The judge must have received exactly one testcase, decoded.
+	// Citron must have received exactly one testcase, decoded.
 	if len(sub.got.TestCases) != 1 {
 		t.Fatalf("built %d testcases from a legacy request, want 1", len(sub.got.TestCases))
 	}
@@ -262,7 +262,7 @@ func TestNativeBatchSubmission(t *testing.T) {
 		}
 	}
 	if len(sub.got.TestCases) != 3 {
-		t.Errorf("the judge received %d testcases", len(sub.got.TestCases))
+		t.Errorf("citron received %d testcases", len(sub.got.TestCases))
 	}
 	if sub.got.Language != 71 {
 		t.Errorf("language resolved to %d, want 71", sub.got.Language)
@@ -270,7 +270,7 @@ func TestNativeBatchSubmission(t *testing.T) {
 }
 
 func TestNativeAndCompatShareOnePipeline(t *testing.T) {
-	// The same source through both surfaces must reach the judge identically.
+	// The same source through both surfaces must reach citron identically.
 	native := &fakeSubmitter{}
 	post(t, newTestServer(t, native), "/submissions",
 		`{"language_id":71,"source_code":"print(1)","testcases":[{"stdin":"x","expected_output":"1"}]}`)

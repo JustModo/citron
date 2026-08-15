@@ -11,9 +11,9 @@ import (
 // The shipped config must load and validate. This catches a config/struct drift
 // that no unit test on Default() would notice.
 func TestShippedConfigLoads(t *testing.T) {
-	cfg, err := Load(filepath.Join("..", "..", "configs", "judge.conf"))
+	cfg, err := Load(filepath.Join("..", "..", "configs", "citron.conf"))
 	if err != nil {
-		t.Fatalf("configs/judge.conf does not load: %v", err)
+		t.Fatalf("configs/citron.conf does not load: %v", err)
 	}
 	if cfg.Sandbox.Driver != "nsjail" {
 		t.Errorf("shipped config must default to the isolating driver, got %q", cfg.Sandbox.Driver)
@@ -25,7 +25,7 @@ func TestShippedConfigLoads(t *testing.T) {
 
 func write(t *testing.T, body string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "judge.conf")
+	p := filepath.Join(t.TempDir(), "citron.conf")
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -5,11 +5,11 @@
 # never mounted.
 
 services:
-  judge:
+  citron:
     build:
       context: .
       dockerfile: Dockerfile
-    image: judge:latest
+    image: citron:latest
     restart: unless-stopped
 
     # Namespace creation. This is the only capability required, and it is far
@@ -25,27 +25,30 @@ services:
       - systempaths=unconfined
     cgroup: private
 
-    # judge.conf binds loopback, which is the right default for running the binary on
+    # citron.conf binds loopback, which is the right default for running the binary on
     # a host. Inside a container the network namespace is the boundary, so the process
     # binds the container's 0.0.0.0 and the published port below decides who can
     # actually reach it.
-    command: ["judge", "-config", "/opt/judge/configs/judge.conf", "-address", "0.0.0.0:2358"]
+    command: ["citron", "-config", "/opt/citron/configs/citron.conf", "-address", "0.0.0.0:2358"]
 
     # Untrusted code runs here. The published port is bound to the host's loopback:
     # change it to an internal network for the application, never to a public
     # interface.
-    networks: [judge]
+    networks: [citron]
     ports:
       - "127.0.0.1:2358:2358"
 
     # Workspaces and the compile cache are disposable, so they live in RAM. The size
     # cap matters: it is what stops a submission writing files until the disk fills.
+    # `exec` is required: Docker mounts tmpfs noexec by default, which would stop a
+    # compiled submission from running its own binary. Interpreted languages would
+    # still work, so this fails in a way that looks language-specific.
     tmpfs:
-      - /box:size=2g,mode=1777
+      - /box:size=2g,mode=1777,exec
 
     volumes:
-      - ./configs/judge.conf:/opt/judge/configs/judge.conf:ro
-      - ./configs/languages.toml:/opt/judge/configs/languages.toml:ro
+      - ./configs/citron.conf:/opt/citron/configs/citron.conf:ro
+      - ./configs/languages.toml:/opt/citron/configs/languages.toml:ro
 
     # Sized for the 2 vCPU / 8 GB baseline. Keep mem_limit above
     # scheduler.memory_budget_mb plus room for the JVM's non-heap overhead.
@@ -53,7 +56,7 @@ services:
     mem_limit: 3g
 
     healthcheck:
-      test: ["CMD", "judge", "-config", "/opt/judge/configs/judge.conf", "-languages"]
+      test: ["CMD", "citron", "-config", "/opt/citron/configs/citron.conf", "-languages"]
       interval: 30s
       timeout: 10s
       start_period: 10s
@@ -66,5 +69,5 @@ services:
         max-file: "3"
 
 networks:
-  judge:
+  citron:
     driver: bridge

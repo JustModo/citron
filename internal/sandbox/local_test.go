@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 func testLimits() judge.Limits {
@@ -145,7 +145,7 @@ func TestDescendantsDoNotSurvive(t *testing.T) {
 }
 
 func TestEnvironmentIsNotInherited(t *testing.T) {
-	t.Setenv("JUDGE_SECRET_TOKEN", "do-not-leak")
+	t.Setenv("CITRON_SECRET_TOKEN", "do-not-leak")
 	res := run(t, Spec{Argv: sh(`env`), Env: []string{"PATH=/usr/bin:/bin", "HOME=/tmp"}})
 	out := string(res.Stdout)
 	if strings.Contains(out, "do-not-leak") {

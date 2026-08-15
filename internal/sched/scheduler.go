@@ -7,17 +7,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // ErrDraining is returned once shutdown has begun. It is a refusal to start new work,
 // not a failure of the work already running.
-var ErrDraining = errors.New("judge is shutting down")
+var ErrDraining = errors.New("citron is shutting down")
 
-// ErrOverloaded is returned when the judge is already running as much as it is
+// ErrOverloaded is returned when citron is already running as much as it is
 // configured to. Degrading into a clear refusal beats accepting work that will then
 // time out on the client.
-var ErrOverloaded = errors.New("judge is at capacity")
+var ErrOverloaded = errors.New("citron is at capacity")
 
 // Runner is the piece that actually executes a submission.
 type Runner interface {
@@ -44,7 +44,7 @@ type Scheduler struct {
 }
 
 // NewScheduler bounds concurrent submissions, and bounds how long one may wait for a
-// slot. The wait matters as much as the limit: without it an overloaded judge keeps
+// slot. The wait matters as much as the limit: without it an overloaded citron keeps
 // accepting work and every client eventually times out having been told nothing,
 // which is worse than being refused immediately.
 func NewScheduler(runner Runner, maxConcurrent int, maxQueueWait time.Duration) *Scheduler {
@@ -64,7 +64,7 @@ func (s *Scheduler) Submit(ctx context.Context, sub judge.Submission) (judge.Sub
 		return judge.SubmissionResult{}, ErrDraining
 	}
 
-	// Bounded wait. Past this the judge is not going to get to this submission in
+	// Bounded wait. Past this citron is not going to get to this submission in
 	// time to be useful, so it says so rather than holding the connection until the
 	// client gives up.
 	waitCtx := ctx

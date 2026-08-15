@@ -1,4 +1,4 @@
-// Package api exposes the judge over HTTP.
+// Package api exposes citron over HTTP.
 //
 // Handlers stay thin on purpose: parse, validate, map to a domain request, call the
 // application, map the result back. Nothing here compiles code, spawns a process or
@@ -18,9 +18,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/sched"
+	"github.com/JustModo/citron/internal/judge"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/sched"
 )
 
 // Submitter runs a submission. The scheduler implements it.
@@ -28,7 +28,7 @@ type Submitter interface {
 	Submit(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error)
 }
 
-// Health reports whether the judge can currently accept work.
+// Health reports whether citron can currently accept work.
 type Health interface {
 	Ready() (bool, string)
 }
@@ -187,15 +187,15 @@ func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeSubmitError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, sched.ErrDraining):
-		writeJSON(w, http.StatusServiceUnavailable, errorResponse{"judge is shutting down"})
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{"citron is shutting down"})
 	case errors.Is(err, sched.ErrOverloaded):
-		writeJSON(w, http.StatusServiceUnavailable, errorResponse{"judge is at capacity"})
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{"citron is at capacity"})
 	case errors.Is(err, sched.ErrTooLarge):
 		writeJSON(w, http.StatusUnprocessableEntity, errorResponse{err.Error()})
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		// The judge ran out of its own time budget. Say so rather than leaving the
+		// Citron ran out of its own time budget. Say so rather than leaving the
 		// client to guess from a dropped connection.
-		writeJSON(w, http.StatusGatewayTimeout, errorResponse{"submission exceeded the judge's time budget"})
+		writeJSON(w, http.StatusGatewayTimeout, errorResponse{"submission exceeded citron's time budget"})
 	default:
 		s.log.Error("submission failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{"submission failed"})

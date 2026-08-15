@@ -7,7 +7,7 @@
 set -u
 
 fails=0
-CG=/sys/fs/cgroup/judge
+CG=/sys/fs/cgroup/citron
 
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1"; fails=$((fails + 1)); }

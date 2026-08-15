@@ -1,6 +1,6 @@
 // Package metrics exposes what an operator would actually alert on.
 //
-// Deliberately not here: CPU and memory of the judge process itself. node_exporter
+// Deliberately not here: CPU and memory of citron's own process. node_exporter
 // and the container runtime already report those, and duplicating them invites two
 // sources of truth for the same number.
 package metrics
@@ -12,7 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 type Metrics struct {
@@ -35,6 +35,8 @@ type Metrics struct {
 	outputTruncated prometheus.Counter
 }
 
+// The judge_* metric names are kept stable across the rename to citron: they are an
+// external contract that existing dashboards and alerts are built on.
 func New() *Metrics {
 	reg := prometheus.NewRegistry()
 	m := &Metrics{
@@ -85,7 +87,7 @@ func New() *Metrics {
 
 		sandboxFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "judge_sandbox_failures_total",
-			Help: "Sandbox failures. These are the judge's fault, not a submission's, and should be zero.",
+			Help: "Sandbox failures. These are citron's fault, not a submission's, and should be zero.",
 		}, []string{"reason"}),
 		outputTruncated: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "judge_output_truncated_total", Help: "Executions whose output hit the limit.",

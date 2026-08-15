@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/lang/hooks"
+	"github.com/JustModo/citron/internal/judge"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/lang/hooks"
 )
 
 // This package is where the shipped configuration meets the real hooks, so the tests

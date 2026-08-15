@@ -14,14 +14,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // Local runs commands directly on the host with rlimits, a private process group and
 // bounded output.
 //
 // It does NOT isolate anything: no namespaces, no filesystem restriction, no network
-// restriction. It exists so the judge runs on a developer machine without nsjail, and
+// restriction. It exists so citron runs on a developer machine without nsjail, and
 // so the Sandbox contract is exercised by tests that need no privileges. The
 // composition root refuses to select it unless the operator has explicitly opted in.
 type Local struct {

@@ -13,11 +13,11 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/JustModo/judge/internal/compare"
-	"github.com/JustModo/judge/internal/judge"
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/sandbox"
-	"github.com/JustModo/judge/internal/workspace"
+	"github.com/JustModo/citron/internal/compare"
+	"github.com/JustModo/citron/internal/judge"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/sandbox"
+	"github.com/JustModo/citron/internal/workspace"
 )
 
 // Options are the knobs the runner needs, already resolved from configuration.
@@ -36,7 +36,7 @@ type Observer interface {
 }
 
 // Admitter reserves machine capacity for one execution. The runner asks before every
-// compile and every testcase, so the judge never starts work the machine cannot hold.
+// compile and every testcase, so citron never starts work the machine cannot hold.
 // A nil Admitter means no admission control, which is only appropriate in tests.
 type Admitter interface {
 	Acquire(ctx context.Context, mem judge.MemoryBytes) (release func(), err error)
@@ -94,7 +94,7 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 	if err := sub.Validate(); err != nil {
 		return judge.SubmissionResult{}, err
 	}
-	// The judge must answer before its client gives up waiting, whatever else is
+	// Citron must answer before its client gives up waiting, whatever else is
 	// happening on the machine.
 	if r.opts.SubmissionLimit > 0 {
 		var cancel context.CancelFunc
@@ -172,7 +172,7 @@ func (r *Runner) compile(
 			// through the cache so artifact lifetime has exactly one owner.
 			return judge.CompileResult{Skipped: true, Success: true}, nil
 		}
-		// Compilers are the most memory-hungry thing the judge runs; they reserve
+		// Compilers are the most memory-hungry thing citron runs; they reserve
 		// capacity like any other execution.
 		release, err := r.admit(ctx, r.opts.CompileLimits.Memory)
 		if err != nil {
@@ -226,7 +226,7 @@ func (r *Runner) runTestCases(
 		g.Go(func() error {
 			res, err := r.runOne(gctx, compiled, argv, limits, tc)
 			if err != nil {
-				// A sandbox failure is the judge's fault, not the submission's. It
+				// A sandbox failure is citron's fault, not the submission's. It
 				// fails this testcase without abandoning the others.
 				r.log.Error("testcase execution failed",
 					"submission", sub.ID, "testcase", tc.Index, "error", err)

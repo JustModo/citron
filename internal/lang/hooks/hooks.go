@@ -7,8 +7,8 @@
 package hooks
 
 import (
-	"github.com/JustModo/judge/internal/lang"
-	"github.com/JustModo/judge/internal/lang/hooks/java"
+	"github.com/JustModo/citron/internal/lang"
+	"github.com/JustModo/citron/internal/lang/hooks/java"
 )
 
 // All returns every language hook, keyed by the `hook` field in languages.toml.

@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // NsjailConfig describes the jail. The mount lists are configuration rather than
@@ -68,7 +68,7 @@ func NewNsjail(cfg NsjailConfig, log *slog.Logger) (*Nsjail, error) {
 // mysteriously failing to compile. Configuration problems belong at boot, where they
 // are one loud error instead of thousands of confusing verdicts.
 func (n *Nsjail) selfTest() error {
-	dir, err := os.MkdirTemp("", "judge-selftest-")
+	dir, err := os.MkdirTemp("", "citron-selftest-")
 	if err != nil {
 		return fmt.Errorf("nsjail self-test: %w", err)
 	}
@@ -84,7 +84,7 @@ func (n *Nsjail) selfTest() error {
 		Dir: dir,
 		// A bare name on purpose: this is how language manifests spell their
 		// commands, so the self-test must exercise the same resolution they do.
-		Argv: []string{"echo", "judge-selftest"},
+		Argv: []string{"echo", "citron-selftest"},
 		Env:  []string{"PATH=/usr/local/bin:/usr/bin:/bin"},
 		Limits: judge.Limits{
 			CPUTime: 5 * time.Second, WallTime: 10 * time.Second,
@@ -95,7 +95,7 @@ func (n *Nsjail) selfTest() error {
 	if err != nil {
 		return fmt.Errorf("nsjail self-test: %w", err)
 	}
-	if res.ExitCode != 0 || !bytes.Contains(res.Stdout, []byte("judge-selftest")) {
+	if res.ExitCode != 0 || !bytes.Contains(res.Stdout, []byte("citron-selftest")) {
 		return fmt.Errorf("nsjail self-test failed (exit %d): %s",
 			res.ExitCode, bytes.TrimSpace(res.Stderr))
 	}
@@ -192,7 +192,7 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 			runErr, bytes.TrimSpace(jailDiagnostics))
 	}
 
-	// A jail that never started the program is the judge's failure, not the
+	// A jail that never started the program is citron's failure, not the
 	// submission's. Reporting it as a compile or runtime error would send a student
 	// chasing a bug in their own code.
 	if bytes.Contains(jailDiagnostics, []byte("Launching child process failed")) ||
@@ -259,9 +259,9 @@ func (n *Nsjail) args(spec Spec) ([]string, error) {
 		"--user", "65534",
 		"--group", "65534",
 		// No network of any kind: no internet, no DNS, no localhost, no metadata
-		// service, no reaching the judge's own API or queue.
+		// service, no reaching citron's own API or queue.
 		"--iface_no_lo",
-		// The cgroup is created and owned by the judge, not by nsjail.
+		// The cgroup is created and owned by citron, not by nsjail.
 		"--disable_clone_newcgroup",
 		// pivot_root is not permitted inside a container; nsjail falls back to
 		// MS_MOVE and chroot. See docs/sandbox.md.

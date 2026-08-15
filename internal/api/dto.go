@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // submissionRequest is the native API: one source, many testcases, compiled once.

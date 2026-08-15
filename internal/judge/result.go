@@ -29,7 +29,7 @@ type TestCaseResult struct {
 	Memory       MemoryBytes
 	MemorySource MemorySource
 
-	// Message explains a judge-level failure (sandbox error, limit hit). It never
+	// Message explains a citron-level failure (sandbox error, limit hit). It never
 	// carries user program output.
 	Message string
 }

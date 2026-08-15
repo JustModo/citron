@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JustModo/judge/internal/judge"
+	"github.com/JustModo/citron/internal/judge"
 )
 
 // cgroup is one execution's resource container.
 //
-// The judge creates it, places the process into it at clone time, and reads the
+// Citron creates it, places the process into it at clone time, and reads the
 // accounting back afterwards. Doing this here rather than delegating to nsjail buys
 // three things: memory.peak counts exactly the pages this execution touched,
 // memory.events says whether the kernel OOM-killed it, and cgroup.kill terminates
@@ -148,7 +148,7 @@ func (c *cgroup) remove() error {
 // The composition root calls this at startup so a misconfigured deployment fails
 // loudly instead of running submissions with unenforced memory limits.
 func CgroupAvailable(root string) error {
-	probe := filepath.Join(root, "judge-probe")
+	probe := filepath.Join(root, "citron-probe")
 	if err := os.Mkdir(probe, 0o755); err != nil {
 		return fmt.Errorf("cgroup root %s is not writable: %w", root, err)
 	}

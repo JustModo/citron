@@ -6,7 +6,7 @@
 #   2. Controllers cannot be enabled on a cgroup that holds processes ("no internal
 #      processes"), so every pid must first be moved into a leaf cgroup.
 #
-# The result is an empty, controller-enabled /sys/fs/cgroup/judge that nsjail can
+# The result is an empty, controller-enabled /sys/fs/cgroup/citron that nsjail can
 # create one child cgroup per execution under.
 set -e
 
@@ -26,10 +26,10 @@ while read -r pid; do
 done < $CG/cgroup.procs
 
 echo "+memory +pids +cpu" > $CG/cgroup.subtree_control
-mkdir -p $CG/judge
+mkdir -p $CG/citron
 # Controllers must be enabled at every level: a per-execution cgroup only gets
 # memory.max if its parent delegates the memory controller downwards too.
-echo "+memory +pids +cpu" > $CG/judge/cgroup.subtree_control
-chown -R judge:judge $CG/judge
+echo "+memory +pids +cpu" > $CG/citron/cgroup.subtree_control
+chown -R citron:citron $CG/citron
 
 exec "$@"
