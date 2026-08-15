@@ -196,18 +196,19 @@ func TestCPUTimeIsMeasured(t *testing.T) {
 	}
 }
 
-func TestProcessLimitIsEnforcedWhenPrlimitExists(t *testing.T) {
+// The local driver deliberately does not bound process count: RLIMIT_NPROC is
+// per-uid across the whole machine, so setting it here breaks unrelated processes
+// owned by the same user. Containment is the cgroup's pids.max, exercised against
+// nsjail in tests/security.
+func TestFileSizeLimitIsEnforcedWhenPrlimitExists(t *testing.T) {
 	if _, err := exec.LookPath("prlimit"); err != nil {
 		t.Skip("prlimit not installed")
 	}
 	lim := testLimits()
-	lim.MaxProcesses = 8
-	lim.WallTime = 5 * time.Second
-	lim.CPUTime = 4 * time.Second
+	lim.MaxFileSize = 4 << 10
 
-	before := time.Now()
-	run(t, Spec{Argv: sh(`:(){ :|:& };:`), Limits: lim})
-	if d := time.Since(before); d > 10*time.Second {
-		t.Errorf("fork bomb was not bounded: took %v", d)
+	res := run(t, Spec{Argv: sh(`dd if=/dev/zero of=big bs=1024 count=1024 2>/dev/null`), Limits: lim})
+	if res.Signal != int(syscall.SIGXFSZ) && res.ExitCode == 0 {
+		t.Errorf("writing past the file size limit succeeded: exit=%d signal=%d", res.ExitCode, res.Signal)
 	}
 }

@@ -99,10 +99,13 @@ func (l *Local) Run(ctx context.Context, spec Spec) (Result, error) {
 		MemorySource:    judge.MemoryFromRusage,
 	}
 
-	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
-	case errors.As(err, &exitErr):
+	case errors.As(err, new(*exec.ExitError)):
+		// A non-zero exit is a result, not a failure of the sandbox.
+	case errors.Is(err, exec.ErrWaitDelay):
+		// The process is gone but a descendant still held the pipes open. Expected
+		// whenever a fork bomb or a backgrounding program is killed.
 	default:
 		return Result{}, fmt.Errorf("sandbox: starting %q: %w", argv[0], err)
 	}
@@ -142,10 +145,14 @@ func (l *Local) withLimits(lim judge.Limits, argv []string) []string {
 		"--cpu=" + strconv.FormatInt(cpu, 10),
 		"--fsize=" + strconv.FormatInt(lim.MaxFileSize, 10),
 		"--stack=" + strconv.FormatInt(int64(lim.Stack), 10),
-		"--nproc=" + strconv.Itoa(lim.MaxProcesses),
-		// Deliberately no --as: the JVM reserves ~1 GB of address space regardless
-		// of heap size, so an address-space cap kills it at startup. Memory is
-		// bounded by the cgroup in the real sandbox.
+		// Deliberately absent:
+		//   --nproc: RLIMIT_NPROC counts every process owned by the uid on the whole
+		//     machine, not the ones in this execution. On a shared uid it makes
+		//     unrelated forks fail, including the compiler's. Process count is
+		//     bounded by the cgroup's pids.max in the real sandbox.
+		//   --as: the JVM reserves ~1 GB of address space regardless of heap size,
+		//     so an address-space cap kills it at startup. Memory is bounded by the
+		//     cgroup's memory.max in the real sandbox.
 		"--",
 	}
 	return append(out, argv...)
