@@ -1,0 +1,63 @@
+# One container replaces Judge0's four (server, workers, postgres, redis).
+#
+# The worker needs a few specific grants to run nsjail unprivileged. Each is
+# explained in docs/sandbox-spike.md; none of them is `privileged: true`, and the
+# Docker socket is never mounted.
+
+services:
+  judge:
+    build:
+      context: ..
+      dockerfile: docker/worker/Dockerfile
+    image: judge:latest
+    restart: unless-stopped
+
+    # Namespace creation. This is the whole reason for the grant, and it is a much
+    # smaller one than Judge0's `privileged: true`.
+    cap_add: [SYS_ADMIN]
+    security_opt:
+      # docker-default denies mount(), which nsjail needs to build the jail.
+      - apparmor=unconfined
+      # Docker masks /proc/kcore and friends by bind-mounting /dev/null over them,
+      # which makes mounting a fresh procfs inside the jail EPERM. Unmasking applies
+      # to this container, which is trusted; the jailed process still gets its own
+      # procfs in its own PID namespace.
+      - systempaths=unconfined
+    cgroup: private
+
+    # Untrusted code runs here. Never publish this port on a public interface — put
+    # it on an internal network and let only the application reach it.
+    networks: [judge]
+    ports:
+      - "127.0.0.1:2358:2358"
+
+    # Workspaces and the compile cache are disposable, so they live in RAM. The size
+    # cap matters: it is what stops a submission writing files until the disk fills.
+    tmpfs:
+      - /box:size=2g,mode=1777
+
+    volumes:
+      - ../configs/judge.conf:/opt/judge/configs/judge.conf:ro
+      - ../configs/languages.toml:/opt/judge/configs/languages.toml:ro
+
+    # Sized for the 2 vCPU / 8 GB baseline. Keep mem_limit above
+    # scheduler.memory_budget_mb plus room for the JVM's non-heap overhead.
+    cpus: 2
+    mem_limit: 3g
+
+    healthcheck:
+      test: ["CMD", "judge", "-config", "/opt/judge/configs/judge.conf", "-languages"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
+
+networks:
+  judge:
+    driver: bridge
