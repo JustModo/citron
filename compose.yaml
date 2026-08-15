@@ -1,14 +1,15 @@
-# One container replaces Judge0's four (server, workers, postgres, redis).
+# One container replaces Judge0's four (server, workers, postgres, redis). The same
+# binary serves the API and executes submissions, so there is one image, not two.
 #
-# The worker needs a few specific grants to run nsjail unprivileged. Each is
+# The container needs a few specific grants to run nsjail unprivileged. Each is
 # explained in docs/sandbox-spike.md; none of them is `privileged: true`, and the
 # Docker socket is never mounted.
 
 services:
   judge:
     build:
-      context: ..
-      dockerfile: docker/worker/Dockerfile
+      context: .
+      dockerfile: docker/judge/Dockerfile
     image: judge:latest
     restart: unless-stopped
 
@@ -25,8 +26,15 @@ services:
       - systempaths=unconfined
     cgroup: private
 
-    # Untrusted code runs here. Never publish this port on a public interface — put
-    # it on an internal network and let only the application reach it.
+    # judge.conf binds loopback, which is the right default for running the binary on
+    # a host. Inside a container the network namespace is the boundary, so the process
+    # binds the container's 0.0.0.0 and the published port below decides who can
+    # actually reach it.
+    command: ["judge", "-config", "/opt/judge/configs/judge.conf", "-address", "0.0.0.0:2358"]
+
+    # Untrusted code runs here. The published port is bound to the host's loopback:
+    # change it to an internal network for the application, never to a public
+    # interface.
     networks: [judge]
     ports:
       - "127.0.0.1:2358:2358"
@@ -37,8 +45,8 @@ services:
       - /box:size=2g,mode=1777
 
     volumes:
-      - ../configs/judge.conf:/opt/judge/configs/judge.conf:ro
-      - ../configs/languages.toml:/opt/judge/configs/languages.toml:ro
+      - ./configs/judge.conf:/opt/judge/configs/judge.conf:ro
+      - ./configs/languages.toml:/opt/judge/configs/languages.toml:ro
 
     # Sized for the 2 vCPU / 8 GB baseline. Keep mem_limit above
     # scheduler.memory_budget_mb plus room for the JVM's non-heap overhead.

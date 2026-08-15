@@ -1,11 +1,5 @@
 package lang
 
-import "time"
-
-func scale(d time.Duration, f float64) time.Duration {
-	return time.Duration(float64(d) * f)
-}
-
 // Hook is the escape hatch for a language whose behaviour a manifest template cannot
 // express. Implementations live in their own package under lang/hooks and must treat
 // the submitted source as hostile input.

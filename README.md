@@ -39,7 +39,7 @@ Also: `GET /languages`, `/health`, `/ready`, `/metrics`.
 ## Running it
 
 ```sh
-docker compose -f deployments/docker-compose.yml up
+docker compose up
 ```
 
 The container needs `cap_add: SYS_ADMIN`, `apparmor=unconfined` and
@@ -102,10 +102,12 @@ This service executes untrusted code.
 |---|---|
 | `build` | Build `bin/judge` |
 | `test` / `test-race` | Unit tests |
+| `lint` | `go vet` and `gofmt` |
+| `up` / `down` | Start and stop the judge with Compose |
 | `integration` | Tests needing real toolchains |
-| `security` | Sandbox escape and resource-bomb suite |
+| `security` | Sandbox escape and resource-bomb suite, against a running judge |
 | `spike` | Verify nsjail and cgroup v2 work on this host |
-| `worker-image` | Build the container image |
+| `image` | Build the container image |
 
 ## Layout
 

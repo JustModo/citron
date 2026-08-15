@@ -4,7 +4,7 @@ Development machine (16 cores / 31 GB), Docker 29.7.2, kernel 7.1.8, nsjail 3.6,
 full isolation enabled. The production target is 2 vCPU / 8 GB, so treat these as
 relative improvements rather than absolute numbers — the ratios are what transfer.
 
-Reproduce with `deployments/docker-compose.yml` and the requests in this file.
+Reproduce with `docker compose up` and the requests in this file.
 
 ## 13 testcases, one HTTP request per testcase
 

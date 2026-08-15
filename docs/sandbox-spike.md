@@ -17,7 +17,7 @@ Container:
 --cgroupns=private
 ```
 
-Entrypoint must run the cgroup delegation dance ([entrypoint.sh](../docker/worker/entrypoint.sh))
+Entrypoint must run the cgroup delegation dance ([entrypoint.sh](../docker/judge/entrypoint.sh))
 before anything else.
 
 nsjail, per execution:

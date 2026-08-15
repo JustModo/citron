@@ -200,8 +200,11 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 		return Result{}, fmt.Errorf("sandbox: jail failed to start the process: %s",
 			bytes.TrimSpace(jailDiagnostics))
 	}
+	// nsjail warns on every run about running unprivileged and about no_pivotroot.
+	// Both are expected and documented, so this is debug detail rather than a
+	// warning that would drown the log at one line per testcase.
 	if len(jailDiagnostics) > 0 {
-		n.log.Warn("nsjail diagnostics", "output", string(bytes.TrimSpace(jailDiagnostics)))
+		n.log.Debug("nsjail diagnostics", "output", string(bytes.TrimSpace(jailDiagnostics)))
 	}
 
 	if st := cmd.ProcessState; st != nil {

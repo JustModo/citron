@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"text/template"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -40,6 +41,10 @@ type ManifestLimits struct {
 	MaxProcesses   int     `toml:"max_processes"`
 	WallMultiplier float64 `toml:"wall_multiplier"`
 	CPUMultiplier  float64 `toml:"cpu_multiplier"`
+}
+
+func scale(d time.Duration, f float64) time.Duration {
+	return time.Duration(float64(d) * f)
 }
 
 // Apply returns limits adjusted for this language. The extra memory is added to the

@@ -33,20 +33,28 @@ import (
 func main() {
 	configPath := flag.String("config", "configs/judge.conf", "path to judge.conf")
 	showLanguages := flag.Bool("languages", false, "probe the configured toolchains and exit")
+	// The config file defaults to loopback, which is right when the binary runs on a
+	// host directly. In a container the network namespace is the boundary, so the
+	// process must bind the container's own 0.0.0.0 and Docker decides who may reach
+	// the published port.
+	address := flag.String("address", "", "override server.address from the config file")
 	flag.Parse()
 
-	if err := runJudge(*configPath, *showLanguages); err != nil {
+	if err := runJudge(*configPath, *showLanguages, *address); err != nil {
 		fmt.Fprintf(os.Stderr, "judge: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runJudge(configPath string, showLanguages bool) error {
+func runJudge(configPath string, showLanguages bool, address string) error {
 	// A broken configuration is fatal at startup. It is the one class of error that
 	// should stop the process rather than degrade it.
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
+	}
+	if address != "" {
+		cfg.Server.Address = address
 	}
 	log := newLogger(cfg.Log)
 
