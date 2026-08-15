@@ -1,0 +1,10 @@
+.git
+.gitignore
+bin
+dist
+docs
+tests
+*_test.go
+README.md
+DESIGN.md
+compose.yaml

@@ -30,6 +30,9 @@ import (
 	"github.com/JustModo/judge/internal/workspace"
 )
 
+// version is set at build time with -ldflags.
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "configs/judge.conf", "path to judge.conf")
 	showLanguages := flag.Bool("languages", false, "probe the configured toolchains and exit")
@@ -38,7 +41,13 @@ func main() {
 	// process must bind the container's own 0.0.0.0 and Docker decides who may reach
 	// the published port.
 	address := flag.String("address", "", "override server.address from the config file")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	if err := runJudge(*configPath, *showLanguages, *address); err != nil {
 		fmt.Fprintf(os.Stderr, "judge: %v\n", err)
@@ -111,7 +120,7 @@ func runJudge(configPath string, showLanguages bool, address string) error {
 		SubmissionLimit: cfg.SubmissionDeadline(),
 		Observer:        metrics,
 	}, log)
-	scheduler := sched.NewScheduler(runner, cfg.Scheduler.MaxConcurrentSubmissions)
+	scheduler := sched.NewScheduler(runner, cfg.Scheduler.MaxConcurrentSubmissions, cfg.QueueWait())
 
 	metricsDone := make(chan struct{})
 	defer close(metricsDone)
