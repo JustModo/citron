@@ -11,14 +11,14 @@ import (
 
 // submissionRequest is the native API: one source, many testcases, compiled once.
 //
-// Fields mirror the Judge0 names a client is likely to already be sending, so the
-// two surfaces do not need two vocabularies.
+// Field names match the legacy API a client may already be sending, so the two
+// surfaces do not need two vocabularies.
 type submissionRequest struct {
 	LanguageID int    `json:"language_id"`
 	Language   string `json:"language"`
 	SourceCode string `json:"source_code"`
 
-	// Testcases present means the native API; absent means the Judge0-compatible
+	// Testcases present means the native API; absent means the legacy
 	// single-testcase form below.
 	Testcases []testcaseRequest `json:"testcases"`
 
@@ -29,7 +29,7 @@ type submissionRequest struct {
 	// more, so one caller cannot degrade the machine for everyone else.
 	CPUTimeLimit  float64 `json:"cpu_time_limit"`
 	WallTimeLimit float64 `json:"wall_time_limit"`
-	MemoryLimit   int64   `json:"memory_limit"` // KB, as in Judge0
+	MemoryLimit   int64   `json:"memory_limit"` // KB, as in the legacy API
 }
 
 type testcaseRequest struct {

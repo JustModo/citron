@@ -1,10 +1,10 @@
-# Sandbox spike — findings
+# Sandbox
 
-Phase 0. Question: does nsjail + cgroup v2 work inside a **non-privileged** Docker
-container? Answer: yes, with three specific flags that are not obvious. Re-run with
-`make spike`.
+How the sandbox is built, and the three non-obvious things required to run nsjail
+inside a **non-privileged** container. `make spike` re-verifies all of it on a new
+host, and should be run before trusting a new deployment.
 
-Verified on kernel 7.1.8 / Docker 29.7.2 / nsjail 3.6 / cgroup2.
+Verified on kernel 7.1.8, Docker 29.7.2, nsjail 3.6, cgroup v2.
 
 ## The working configuration
 
@@ -58,7 +58,7 @@ the host's full cgroup hierarchy. The dance above keeps `--cgroupns=private`.
 jailed process holds no capabilities, has a private mount namespace, a fresh PID
 namespace and seccomp — a chroot escape needs a capability it does not have.
 
-## Results
+## Verified behaviour
 
 | Check | Result |
 |---|---|

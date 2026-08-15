@@ -19,19 +19,19 @@ Memory is `memory.peak` from the execution's own cgroup, so it counts pages actu
 touched. Java's 31 MB against a 256 MB limit is the JVM's floor, and the reason its
 manifest adds headroom.
 
-## 13 testcases via the Judge0-compatible path
+## 13 testcases via the legacy per-testcase path
 
-The shape the existing consumer sends today, unchanged. The Judge0 baseline it
-replaces was roughly 30 s for the same work.
+Clients that send one request per testcase, unchanged.
 
 | Language | Total | Per testcase | Compilations |
 |---|---|---|---|
 | Python | 0.23 s | 18 ms | 1 (12 cache hits) |
 | Java | 0.86 s | 66 ms | 1 (13 cache hits) |
 
-The compile cache is what makes this work — without it the same pattern recompiles
-identical source once per testcase. The same work as one native batch request is
-0.29 s for Java, roughly 3× faster again, because it is one round trip instead of 13.
+The compile cache is what makes this viable: without it the same pattern recompiles
+identical source once per testcase, which for Java is about a second each time. The
+same work as a single native batch request takes 0.29 s, roughly 3× faster again,
+because it is one round trip instead of thirteen.
 
 ## Throughput and scaling
 

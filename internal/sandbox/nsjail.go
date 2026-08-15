@@ -264,7 +264,7 @@ func (n *Nsjail) args(spec Spec) ([]string, error) {
 		// The cgroup is created and owned by the judge, not by nsjail.
 		"--disable_clone_newcgroup",
 		// pivot_root is not permitted inside a container; nsjail falls back to
-		// MS_MOVE and chroot. See docs/sandbox-spike.md.
+		// MS_MOVE and chroot. See docs/sandbox.md.
 		"--no_pivotroot",
 		// Deliberately not set: RLIMIT_AS. The JVM reserves roughly a gigabyte of
 		// address space whatever its heap size, so capping address space kills it

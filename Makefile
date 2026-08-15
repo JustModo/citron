@@ -1,7 +1,7 @@
 BIN   := bin/judge
 IMAGE := judge:dev
 
-# Grants nsjail needs inside a container. Explained in docs/sandbox-spike.md; none of
+# Grants nsjail needs inside a container. Explained in docs/sandbox.md; none of
 # them is --privileged, and no Docker socket is mounted.
 SANDBOX_FLAGS := --cap-add=SYS_ADMIN \
 	--security-opt apparmor=unconfined \
@@ -32,7 +32,7 @@ security:
 	go test -tags=security -count=1 -timeout=15m ./tests/security/...
 
 image:
-	docker build -f docker/judge/Dockerfile -t $(IMAGE) .
+	docker build -t $(IMAGE) .
 
 # Verifies nsjail and cgroup v2 actually work on this host before trusting them.
 spike: image

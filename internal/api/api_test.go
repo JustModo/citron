@@ -81,7 +81,7 @@ func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) 
 
 // The exact request the existing consumer sends today, and the exact fields it reads
 // back. If this test fails, pointing that consumer at this judge breaks.
-func TestJudge0CompatGoldenRequest(t *testing.T) {
+func TestLegacyGoldenRequest(t *testing.T) {
 	sub := &fakeSubmitter{result: judge.SubmissionResult{
 		Status:  judge.StatusAccepted,
 		Compile: judge.CompileResult{Success: true},
@@ -114,7 +114,7 @@ func TestJudge0CompatGoldenRequest(t *testing.T) {
 		Token         string  `json:"token"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("response is not Judge0-shaped: %v\n%s", err, rec.Body)
+		t.Fatalf("response does not match the legacy wire format: %v\n%s", err, rec.Body)
 	}
 
 	if got.Status.ID != 3 {
@@ -133,7 +133,7 @@ func TestJudge0CompatGoldenRequest(t *testing.T) {
 	if string(decoded) != "5\n" {
 		t.Errorf("stdout = %q, want %q", decoded, "5\n")
 	}
-	// Absent values must be null, as Judge0 sends them.
+	// Absent values must be null, not empty strings.
 	if got.Stderr != nil {
 		t.Errorf("empty stderr should be null, got %q", *got.Stderr)
 	}
@@ -146,7 +146,7 @@ func TestJudge0CompatGoldenRequest(t *testing.T) {
 
 	// The judge must have received exactly one testcase, decoded.
 	if len(sub.got.TestCases) != 1 {
-		t.Fatalf("built %d testcases from a Judge0 request, want 1", len(sub.got.TestCases))
+		t.Fatalf("built %d testcases from a legacy request, want 1", len(sub.got.TestCases))
 	}
 	if string(sub.got.Source) != "print(2+3)" {
 		t.Errorf("source was not decoded: %q", sub.got.Source)
@@ -157,7 +157,7 @@ func TestJudge0CompatGoldenRequest(t *testing.T) {
 }
 
 // The consumer branches on these substrings rather than on ids.
-func TestJudge0StatusMapping(t *testing.T) {
+func TestLegacyStatusMapping(t *testing.T) {
 	tests := []struct {
 		status   judge.Status
 		wantID   int
@@ -179,7 +179,7 @@ func TestJudge0StatusMapping(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.status.String(), func(t *testing.T) {
-			got := toJudge0Status(tt.status)
+			got := toLegacyStatus(tt.status)
 			if got.id != tt.wantID {
 				t.Errorf("id = %d, want %d", got.id, tt.wantID)
 			}
@@ -191,7 +191,7 @@ func TestJudge0StatusMapping(t *testing.T) {
 
 	// These two substrings are load-bearing for the consumer's overall verdict, and
 	// must not appear on statuses that do not mean them.
-	for status, j := range judge0Statuses {
+	for status, j := range legacyStatuses {
 		if status != judge.StatusTimeLimitExceeded && strings.Contains(j.desc, "Time Limit") {
 			t.Errorf("%v description %q contains \"Time Limit\" but is not a timeout", status, j.desc)
 		}

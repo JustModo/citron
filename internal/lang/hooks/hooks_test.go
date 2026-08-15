@@ -33,7 +33,7 @@ func shipped(t *testing.T) *lang.Registry {
 	return r
 }
 
-// The consumer submits these Judge0 ids; they must keep resolving.
+// Existing clients submit these ids; they must keep resolving.
 func TestShippedRegistry(t *testing.T) {
 	r := shipped(t)
 	for id, name := range map[judge.LanguageID]string{50: "c", 54: "cpp", 62: "java", 71: "python"} {

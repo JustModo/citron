@@ -1,20 +1,19 @@
-# One container replaces Judge0's four (server, workers, postgres, redis). The same
-# binary serves the API and executes submissions, so there is one image, not two.
+# A single container serves the API and executes submissions.
 #
-# The container needs a few specific grants to run nsjail unprivileged. Each is
-# explained in docs/sandbox-spike.md; none of them is `privileged: true`, and the
-# Docker socket is never mounted.
+# It needs a few specific grants so nsjail can build its namespaces. Each is explained
+# in docs/sandbox.md; none of them is `privileged: true`, and the Docker socket is
+# never mounted.
 
 services:
   judge:
     build:
       context: .
-      dockerfile: docker/judge/Dockerfile
+      dockerfile: Dockerfile
     image: judge:latest
     restart: unless-stopped
 
-    # Namespace creation. This is the whole reason for the grant, and it is a much
-    # smaller one than Judge0's `privileged: true`.
+    # Namespace creation. This is the only capability required, and it is far
+    # narrower than running the container privileged.
     cap_add: [SYS_ADMIN]
     security_opt:
       # docker-default denies mount(), which nsjail needs to build the jail.

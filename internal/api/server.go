@@ -153,7 +153,7 @@ func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A request without a testcases array is the Judge0 single-testcase form. That
+	// A request without a testcases array is the legacy single-testcase form. That
 	// is the only difference between the two surfaces; everything below is shared.
 	compat := req.Testcases == nil
 
@@ -178,7 +178,7 @@ func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if compat {
-		writeJSON(w, http.StatusCreated, toJudge0(result, c))
+		writeJSON(w, http.StatusCreated, toLegacy(result, c))
 		return
 	}
 	writeJSON(w, http.StatusCreated, toNative(result, c))
@@ -307,7 +307,7 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 func toNative(res judge.SubmissionResult, c codec) submissionResponse {
 	out := submissionResponse{
 		ID:         string(res.ID),
-		Status:     statusDTO{toJudge0Status(res.Status).id, res.Status.String()},
+		Status:     statusDTO{toLegacyStatus(res.Status).id, res.Status.String()},
 		WallTimeMS: res.WallTime.Milliseconds(),
 		Compile: compileDTO{
 			Skipped:    res.Compile.Skipped,
@@ -321,7 +321,7 @@ func toNative(res judge.SubmissionResult, c codec) submissionResponse {
 	for i, tc := range res.TestCases {
 		out.Testcases[i] = testcaseResultDTO{
 			Index:           int(tc.Index),
-			Status:          statusDTO{toJudge0Status(tc.Status).id, tc.Status.String()},
+			Status:          statusDTO{toLegacyStatus(tc.Status).id, tc.Status.String()},
 			Stdout:          c.encode(tc.Stdout),
 			Stderr:          c.encode(tc.Stderr),
 			ExitCode:        tc.ExitCode,
@@ -338,12 +338,12 @@ func toNative(res judge.SubmissionResult, c codec) submissionResponse {
 	return out
 }
 
-// toJudge0 flattens a submission down to the single-testcase shape Judge0 returns.
-func toJudge0(res judge.SubmissionResult, c codec) judge0Response {
-	status := toJudge0Status(res.Status)
-	out := judge0Response{
-		Token:     string(res.ID),
-		StatusOut: statusDTO{status.id, status.desc},
+// toLegacy flattens a submission down to the legacy single-testcase response.
+func toLegacy(res judge.SubmissionResult, c codec) legacyResponse {
+	status := toLegacyStatus(res.Status)
+	out := legacyResponse{
+		Token:  string(res.ID),
+		Status: statusDTO{status.id, status.desc},
 	}
 	if len(res.Compile.Output) > 0 {
 		out.CompileOutput = nilIfEmpty(c.encode(res.Compile.Output))

@@ -1,8 +1,8 @@
 package judge
 
 // Status is the verdict for a testcase or a whole submission. It is the judge's own
-// vocabulary; the Judge0 integer mapping lives in the API layer so the domain never
-// depends on a wire format.
+// vocabulary; the integer codes used on the wire live in the API layer so the domain
+// never depends on a transport format.
 type Status int
 
 const (
