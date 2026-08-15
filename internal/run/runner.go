@@ -25,6 +25,14 @@ type Options struct {
 	CompileLimits   judge.Limits
 	MaxParallel     int
 	SubmissionLimit time.Duration
+	// Observer is optional; nil disables metrics.
+	Observer Observer
+}
+
+// Observer records finished submissions. It is optional; a nil Observer disables
+// metrics without any conditional logic on the hot path.
+type Observer interface {
+	ObserveSubmission(language string, res judge.SubmissionResult)
 }
 
 // Admitter reserves machine capacity for one execution. The runner asks before every
@@ -119,6 +127,7 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 			}
 		}
 		result.WallTime = time.Since(start)
+		r.observe(language.Name(), result)
 		return result, nil
 	}
 
@@ -129,7 +138,14 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 	result.TestCases = results
 	result.Status = judge.Aggregate(result.Compile, results)
 	result.WallTime = time.Since(start)
+	r.observe(language.Name(), result)
 	return result, nil
+}
+
+func (r *Runner) observe(language string, res judge.SubmissionResult) {
+	if r.opts.Observer != nil {
+		r.opts.Observer.ObserveSubmission(language, res)
+	}
 }
 
 func (r *Runner) compile(

@@ -22,6 +22,7 @@ import (
 	"github.com/JustModo/judge/internal/compare"
 	"github.com/JustModo/judge/internal/config"
 	"github.com/JustModo/judge/internal/lang"
+	"github.com/JustModo/judge/internal/metrics"
 	"github.com/JustModo/judge/internal/run"
 	"github.com/JustModo/judge/internal/sandbox"
 	"github.com/JustModo/judge/internal/sched"
@@ -93,20 +94,27 @@ func runJudge(configPath string, showLanguages bool) error {
 		return err
 	}
 
+	metrics := metrics.New()
 	admitter := sched.NewAdmitter(cfg.Scheduler.MemoryBudgetMB, cfg.Scheduler.ExecutionSlots)
 	runner := run.NewRunner(registry, sb, workspaces, cache, compare.Default(), admitter, run.Options{
 		CompileLimits:   cfg.CompileLimits(),
 		MaxParallel:     cfg.Limits.Submission.MaxParallelTestcases,
 		SubmissionLimit: cfg.SubmissionDeadline(),
+		Observer:        metrics,
 	}, log)
 	scheduler := sched.NewScheduler(runner, cfg.Scheduler.MaxConcurrentSubmissions)
 
+	metricsDone := make(chan struct{})
+	defer close(metricsDone)
+	go metrics.Watch(metricsDone, capacity{scheduler, admitter}, 2*time.Second)
+
 	server := api.NewServer(api.Options{
-		Submitter: scheduler,
-		Registry:  registry,
-		Health:    &health{scheduler: scheduler},
-		AuthToken: cfg.Server.AuthToken,
-		Logger:    log,
+		Submitter:      scheduler,
+		Registry:       registry,
+		Health:         &health{scheduler: scheduler},
+		AuthToken:      cfg.Server.AuthToken,
+		Logger:         log,
+		MetricsHandler: metrics.Handler(),
 		Limits: api.Limits{
 			Execution:      cfg.ExecutionLimits(),
 			MaxTestcases:   cfg.Limits.Submission.MaxTestcases,
@@ -189,6 +197,19 @@ func newSandbox(cfg config.Config, log *slog.Logger) (sandbox.Sandbox, error) {
 		return nil, fmt.Errorf("unknown sandbox driver %q", cfg.Sandbox.Driver)
 	}
 }
+
+// capacity joins the two things that bound throughput — submission slots and the
+// memory budget — into the single view the metrics gauges sample.
+type capacity struct {
+	scheduler *sched.Scheduler
+	admitter  *sched.Admitter
+}
+
+func (c capacity) Active() int64             { return c.scheduler.Active() }
+func (c capacity) Queued() int64             { return c.scheduler.Queued() }
+func (c capacity) InFlightExecutions() int64 { return c.admitter.InFlight() }
+func (c capacity) ReservedMB() int64         { return c.admitter.ReservedMB() }
+func (c capacity) BudgetMB() int64           { return c.admitter.BudgetMB() }
 
 // health answers /ready. Being at capacity is not unready — it is the system working
 // as configured — but shutting down is.
