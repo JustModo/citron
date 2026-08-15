@@ -1,14 +1,16 @@
 package lang
 
 import (
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/JustModo/judge/internal/judge"
 )
+
+// Tests here cover the manifest machinery only, using inline manifests and a stub
+// hook. The shipped languages.toml and the real hooks are exercised in
+// internal/lang/hooks, which can import both without a cycle.
 
 func baseLimits() judge.Limits {
 	return judge.Limits{
@@ -18,28 +20,62 @@ func baseLimits() judge.Limits {
 	}
 }
 
-// The shipped manifests must load: a typo here breaks every submission.
-func shipped(t *testing.T) *Registry {
+// stubHook stands in for a real language hook: it renames the source after the first
+// line of the submission, which is enough to prove the hook is consulted.
+type stubHook struct{}
+
+func (stubHook) Files(source []byte, m Manifest) (string, string) {
+	name, _, _ := strings.Cut(string(source), "\n")
+	if name == "" {
+		return m.Source, m.Binary
+	}
+	return name + ".src", name
+}
+
+func registryFrom(t *testing.T, body string, hooks Hooks) *Registry {
 	t.Helper()
-	r, err := LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"))
+	manifests, err := parseManifests([]byte(body))
 	if err != nil {
-		t.Fatalf("configs/languages.toml does not load: %v", err)
+		t.Fatalf("parse: %v", err)
+	}
+	r, err := newRegistry(manifests, hooks)
+	if err != nil {
+		t.Fatalf("register: %v", err)
 	}
 	return r
 }
 
-func TestShippedRegistry(t *testing.T) {
-	r := shipped(t)
-	// The consumer sends these Judge0 ids; they must keep resolving.
-	for id, name := range map[judge.LanguageID]string{50: "c", 54: "cpp", 62: "java", 71: "python"} {
-		l, err := r.ByID(id)
-		if err != nil {
-			t.Errorf("language id %d (%s) missing: %v", id, name, err)
-			continue
-		}
-		if l.Name() != name {
-			t.Errorf("id %d resolved to %q, want %q", id, l.Name(), name)
-		}
+const twoLanguages = `
+[[language]]
+id = 1
+name = "compiled"
+label = "Compiled"
+source = "main.x"
+binary = "main"
+compile = ["xc", "-o", "{{.Binary}}", "{{.Source}}"]
+run = ["./{{.Binary}}"]
+probe = ["xc", "--version"]
+
+[[language]]
+id = 2
+name = "interpreted"
+label = "Interpreted"
+source = "main.y"
+run = ["yrun", "{{.Source}}", "--dir", "{{.Dir}}"]
+`
+
+func TestRegistryLookups(t *testing.T) {
+	r := registryFrom(t, twoLanguages, nil)
+
+	l, err := r.ByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Name() != "compiled" || l.Label() != "Compiled" {
+		t.Errorf("id 1 resolved to %q/%q", l.Name(), l.Label())
+	}
+	if _, err := r.ByName("interpreted"); err != nil {
+		t.Errorf("lookup by name failed: %v", err)
 	}
 	if _, err := r.ByID(9999); err == nil {
 		t.Error("unknown id should error")
@@ -47,153 +83,148 @@ func TestShippedRegistry(t *testing.T) {
 	if _, err := r.ByName("cobol"); err == nil {
 		t.Error("unknown name should error")
 	}
+	if len(r.All()) != 2 {
+		t.Errorf("All() returned %d languages, want 2", len(r.All()))
+	}
 }
 
 func TestArgvRendering(t *testing.T) {
-	r := shipped(t)
-	tests := []struct {
-		lang        string
-		source      []byte
-		wantSrc     string
-		wantBin     string
-		compileHas  []string
-		runHas      []string
-		runNotEmpty bool
-	}{
-		{
-			lang: "c", source: []byte("int main(){}"),
-			wantSrc: "main.c", wantBin: "main",
-			compileHas: []string{"gcc", "main.c", "main"},
-			runHas:     []string{"./main"},
-		},
-		{
-			lang: "python", source: []byte("print(1)"),
-			wantSrc: "main.py",
-			runHas:  []string{"python3", "main.py"},
-		},
-		{
-			lang: "java", source: []byte("public class Solution { }"),
-			wantSrc: "Solution.java", wantBin: "Solution",
-			compileHas: []string{"javac", "Solution.java"},
-			runHas:     []string{"java", "Solution", "-Xss65536k", "-Xmx256m"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.lang, func(t *testing.T) {
-			l, err := r.ByName(tt.lang)
-			if err != nil {
-				t.Fatal(err)
-			}
-			src, bin := l.Files(tt.source)
-			if src != tt.wantSrc {
-				t.Errorf("source = %q, want %q", src, tt.wantSrc)
-			}
-			if tt.wantBin != "" && bin != tt.wantBin {
-				t.Errorf("binary = %q, want %q", bin, tt.wantBin)
-			}
+	r := registryFrom(t, twoLanguages, nil)
+	base := baseLimits()
 
-			base := baseLimits()
-			ctx := Context{Source: src, Binary: bin, Dir: "/box", Limits: l.Limits(base), BaseMem: base.Memory}
-			compile, err := l.CompileArgv(ctx)
-			if err != nil {
-				t.Fatalf("compile argv: %v", err)
-			}
-			run, err := l.RunArgv(ctx)
-			if err != nil {
-				t.Fatalf("run argv: %v", err)
-			}
-			joinedC, joinedR := strings.Join(compile, " "), strings.Join(run, " ")
-			for _, want := range tt.compileHas {
-				if !strings.Contains(joinedC, want) {
-					t.Errorf("compile argv %q missing %q", joinedC, want)
-				}
-			}
-			for _, want := range tt.runHas {
-				if !strings.Contains(joinedR, want) {
-					t.Errorf("run argv %q missing %q", joinedR, want)
-				}
-			}
-			if strings.Contains(joinedC+joinedR, "{{") {
-				t.Errorf("unrendered template left in argv: %q %q", joinedC, joinedR)
-			}
-		})
-	}
-}
+	compiled, _ := r.ByName("compiled")
+	src, bin := compiled.Files(nil)
+	ctx := Context{Source: src, Binary: bin, Dir: "/box", Limits: base, BaseMem: base.Memory}
 
-// Java heap must be the requested memory, while the enforced ceiling is higher — the
-// JVM's non-heap overhead has to live somewhere or every Java submission OOMs.
-func TestJavaGetsHeadroomAboveItsHeap(t *testing.T) {
-	r := shipped(t)
-	java, err := r.ByName("java")
+	compile, err := compiled.CompileArgv(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := baseLimits()
-	got := java.Limits(base)
-	if got.Memory <= base.Memory {
-		t.Errorf("java memory ceiling %d MB should exceed the base %d MB", got.Memory.MB(), base.Memory.MB())
+	if got := strings.Join(compile, " "); got != "xc -o main main.x" {
+		t.Errorf("compile argv = %q", got)
 	}
-	if got.MaxProcesses <= base.MaxProcesses {
-		t.Errorf("java needs more pids than %d (JVM threads are pids)", base.MaxProcesses)
+	run, err := compiled.RunArgv(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.WallTime <= base.WallTime {
-		t.Error("java needs a longer wall clock than the baseline")
+	if got := strings.Join(run, " "); got != "./main" {
+		t.Errorf("run argv = %q", got)
 	}
 
-	argv, err := java.RunArgv(Context{Source: "Main.java", Binary: "Main", Limits: got, BaseMem: base.Memory})
+	interpreted, _ := r.ByName("interpreted")
+	src, bin = interpreted.Files(nil)
+	ctx = Context{Source: src, Binary: bin, Dir: "/box", Limits: base, BaseMem: base.Memory}
+	if argv, _ := interpreted.CompileArgv(ctx); argv != nil {
+		t.Errorf("a language with no compile command should render nil, got %v", argv)
+	}
+	run, err = interpreted.RunArgv(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(run, " ")
+	if joined != "yrun main.y --dir /box" {
+		t.Errorf("run argv = %q", joined)
+	}
+	if strings.Contains(joined, "{{") {
+		t.Errorf("unrendered template left in argv: %v", run)
+	}
+}
+
+// A hook, when configured, decides the filenames instead of the manifest.
+func TestHookOverridesFilenames(t *testing.T) {
+	body := `
+[[language]]
+id = 3
+name = "hooked"
+source = "default.src"
+binary = "default"
+run = ["run", "{{.Source}}"]
+hook = "stub"
+`
+	r := registryFrom(t, body, Hooks{"stub": stubHook{}})
+	l, _ := r.ByName("hooked")
+
+	src, bin := l.Files([]byte("Derived\nrest of the source"))
+	if src != "Derived.src" || bin != "Derived" {
+		t.Errorf("hook not consulted: source=%q binary=%q", src, bin)
+	}
+
+	// A hook that cannot derive a name falls back to the manifest.
+	if src, bin = l.Files(nil); src != "default.src" || bin != "default" {
+		t.Errorf("fallback failed: source=%q binary=%q", src, bin)
+	}
+}
+
+func TestLimitMultipliers(t *testing.T) {
+	body := `
+[[language]]
+id = 4
+name = "heavy"
+source = "main.z"
+run = ["z", "{{.Source}}"]
+
+[language.limits]
+memory_extra_mb = 256
+max_processes = 64
+wall_multiplier = 2.0
+cpu_multiplier = 1.5
+`
+	r := registryFrom(t, body, nil)
+	l, _ := r.ByName("heavy")
+
+	base := baseLimits()
+	got := l.Limits(base)
+
+	if got.Memory != base.Memory+(256<<20) {
+		t.Errorf("memory = %d MB, want %d", got.Memory.MB(), base.Memory.MB()+256)
+	}
+	if got.MaxProcesses != 64 {
+		t.Errorf("max processes = %d, want 64", got.MaxProcesses)
+	}
+	if got.WallTime != 8*time.Second {
+		t.Errorf("wall time = %v, want 8s", got.WallTime)
+	}
+	if got.CPUTime != 3*time.Second {
+		t.Errorf("cpu time = %v, want 3s", got.CPUTime)
+	}
+	// Untouched fields must survive.
+	if got.MaxStdout != base.MaxStdout {
+		t.Error("multipliers altered an unrelated limit")
+	}
+}
+
+// A runtime that sizes a heap must be given what the submission was promised, not
+// the padded ceiling — otherwise the headroom is handed straight back to the heap.
+func TestBaseMemoryIsSeparateFromTheCeiling(t *testing.T) {
+	body := `
+[[language]]
+id = 5
+name = "heaped"
+source = "main.h"
+run = ["run", "-Xmx{{.HeapMB}}m", "-ceiling{{.MemMB}}", "-Xss{{.StackKB}}k"]
+
+[language.limits]
+memory_extra_mb = 256
+`
+	r := registryFrom(t, body, nil)
+	l, _ := r.ByName("heaped")
+
+	base := baseLimits()
+	argv, err := l.RunArgv(Context{
+		Source: "main.h", Limits: l.Limits(base), BaseMem: base.Memory,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(argv, " ")
 	if !strings.Contains(joined, "-Xmx256m") {
-		t.Errorf("heap should be the requested 256m, not the padded ceiling: %q", joined)
+		t.Errorf("heap should be the promised 256m: %q", joined)
 	}
-}
-
-func TestJavaClassNameExtraction(t *testing.T) {
-	tests := []struct {
-		name, source, wantSrc string
-	}{
-		{"public class", "public class Foo {}", "Foo.java"},
-		{"final", "public final class Bar {}", "Bar.java"},
-		{"record", "public record Point(int x) {}", "Point.java"},
-		{"leading imports", "import java.util.*;\n\npublic class Baz {}", "Baz.java"},
-		{"no public class falls back", "class Helper {}", "Main.java"},
-		{"non-public keyword in a comment", "// public class Sneaky\nclass X {}", "Main.java"},
-		{"empty source falls back", "", "Main.java"},
+	if !strings.Contains(joined, "-ceiling512") {
+		t.Errorf("ceiling should include the headroom: %q", joined)
 	}
-	m := Manifest{Source: "Main.java", Binary: "Main"}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			src, bin := javaHook{}.Files([]byte(tt.source), m)
-			if src != tt.wantSrc {
-				t.Errorf("source = %q, want %q", src, tt.wantSrc)
-			}
-			if bin+".java" != src {
-				t.Errorf("binary %q inconsistent with source %q", bin, src)
-			}
-		})
-	}
-}
-
-// The class name reaches a filename and an argv element, so a hostile one must not
-// escape the identifier shape.
-func TestJavaClassNameIsSanitized(t *testing.T) {
-	safe := regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*\.java$`)
-	m := Manifest{Source: "Main.java", Binary: "Main"}
-	for _, src := range []string{
-		"public class ../../etc/passwd {}",
-		"public class Foo;rm -rf / {}",
-		"public class $(id) {}",
-		"public class " + strings.Repeat("A", 200) + " {}",
-	} {
-		got, bin := javaHook{}.Files([]byte(src), m)
-		if !safe.MatchString(got) {
-			t.Errorf("unsanitized filename from %q: %q", src, got)
-		}
-		if strings.ContainsAny(bin, "/;$ .") {
-			t.Errorf("unsanitized binary name from %q: %q", src, bin)
-		}
+	if !strings.Contains(joined, "-Xss65536k") {
+		t.Errorf("stack should render in KB: %q", joined)
 	}
 }
 
@@ -204,16 +235,19 @@ func TestManifestValidation(t *testing.T) {
 		{"no languages", "", "no languages defined"},
 		{"missing id", "[[language]]\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n", "no id"},
 		{"missing name", "[[language]]\nid=1\nsource=\"a\"\nrun=[\"a\"]\n", "no name"},
+		{"missing source", "[[language]]\nid=1\nname=\"x\"\nrun=[\"a\"]\n", "no source filename"},
 		{"missing run", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\n", "no run command"},
 		{"unknown hook", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\nhook=\"nope\"\n", "unknown hook"},
 		{"unknown key", "[[language]]\nid=1\nname=\"x\"\nsourse=\"a\"\nrun=[\"a\"]\n", "unknown key"},
 		{"duplicate id", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n[[language]]\nid=1\nname=\"y\"\nsource=\"b\"\nrun=[\"b\"]\n", "duplicate id"},
+		{"duplicate name", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n[[language]]\nid=2\nname=\"x\"\nsource=\"b\"\nrun=[\"b\"]\n", "duplicate name"},
+		{"bad template", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"{{.Broken\"]\n", "argv"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ms, err := parseManifests([]byte(tt.toml))
+			manifests, err := parseManifests([]byte(tt.toml))
 			if err == nil {
-				_, err = newRegistry(ms)
+				_, err = newRegistry(manifests, nil)
 			}
 			if err == nil {
 				t.Fatalf("expected an error mentioning %q", tt.want)
@@ -225,9 +259,9 @@ func TestManifestValidation(t *testing.T) {
 	}
 }
 
-// A new language should need no Go changes.
+// A language needing no custom behaviour should need no Go code at all.
 func TestAddingALanguageIsConfigOnly(t *testing.T) {
-	ms, err := parseManifests([]byte(`
+	r := registryFrom(t, `
 [[language]]
 id = 60
 name = "go"
@@ -236,14 +270,9 @@ source = "main.go"
 binary = "main"
 compile = ["go", "build", "-o", "{{.Binary}}", "{{.Source}}"]
 run = ["./{{.Binary}}"]
-`))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	r, err := newRegistry(ms)
-	if err != nil {
-		t.Fatalf("register: %v", err)
-	}
+probe = ["go", "version"]
+`, nil)
+
 	l, err := r.ByName("go")
 	if err != nil {
 		t.Fatal(err)
@@ -255,5 +284,8 @@ run = ["./{{.Binary}}"]
 	}
 	if len(argv) != 1 || argv[0] != "./main" {
 		t.Errorf("run argv = %v, want [./main]", argv)
+	}
+	if probe := l.ProbeCommand(); len(probe) != 2 || probe[0] != "go" {
+		t.Errorf("probe = %v", probe)
 	}
 }

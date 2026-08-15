@@ -16,6 +16,7 @@ import (
 
 	"github.com/JustModo/judge/internal/judge"
 	"github.com/JustModo/judge/internal/lang"
+	"github.com/JustModo/judge/internal/lang/hooks"
 	"github.com/JustModo/judge/internal/sched"
 )
 
@@ -45,7 +46,7 @@ func (f *fakeSubmitter) Submit(_ context.Context, sub judge.Submission) (judge.S
 
 func newTestServer(t *testing.T, sub *fakeSubmitter) http.Handler {
 	t.Helper()
-	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"))
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +320,7 @@ func TestValidation(t *testing.T) {
 }
 
 func TestTooManyTestcasesIsRejected(t *testing.T) {
-	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"))
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +431,7 @@ type notReady struct{}
 func (notReady) Ready() (bool, string) { return false, "queue unreachable" }
 
 func TestReadyDegradesWithoutKillingLiveness(t *testing.T) {
-	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"))
+	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
 	h := NewServer(Options{
 		Submitter: &fakeSubmitter{}, Registry: registry, Health: notReady{},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -450,7 +451,7 @@ func TestReadyDegradesWithoutKillingLiveness(t *testing.T) {
 }
 
 func TestAuthToken(t *testing.T) {
-	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"))
+	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
 	h := NewServer(Options{
 		Submitter: &fakeSubmitter{}, Registry: registry, AuthToken: "s3cret",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

@@ -158,7 +158,7 @@ func compileTemplates(name string, argv []string) ([]*template.Template, error) 
 
 var ErrInvalidManifest = errors.New("invalid language manifest")
 
-func (m Manifest) validate() error {
+func (m Manifest) validate(hooks Hooks) error {
 	switch {
 	case m.ID <= 0:
 		return fmt.Errorf("%w: %q has no id", ErrInvalidManifest, m.Name)

@@ -20,22 +20,23 @@ type Registry struct {
 	order  []*Language
 }
 
-// LoadRegistry reads a languages.toml file.
-func LoadRegistry(path string) (*Registry, error) {
+// LoadRegistry reads a languages.toml file. Hooks supply the Go implementations for
+// manifests that name one; pass hooks.All() unless a test needs something narrower.
+func LoadRegistry(path string, hooks Hooks) (*Registry, error) {
 	manifests, err := loadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return newRegistry(manifests)
+	return newRegistry(manifests, hooks)
 }
 
-func newRegistry(manifests []Manifest) (*Registry, error) {
+func newRegistry(manifests []Manifest, hooks Hooks) (*Registry, error) {
 	r := &Registry{
 		byID:   make(map[judge.LanguageID]*Language, len(manifests)),
 		byName: make(map[string]*Language, len(manifests)),
 	}
 	for _, m := range manifests {
-		if err := m.validate(); err != nil {
+		if err := m.validate(hooks); err != nil {
 			return nil, err
 		}
 		id := judge.LanguageID(m.ID)

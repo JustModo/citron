@@ -14,6 +14,7 @@ import (
 	"github.com/JustModo/judge/internal/compare"
 	"github.com/JustModo/judge/internal/judge"
 	"github.com/JustModo/judge/internal/lang"
+	"github.com/JustModo/judge/internal/lang/hooks"
 	"github.com/JustModo/judge/internal/sandbox"
 	"github.com/JustModo/judge/internal/workspace"
 )
@@ -22,7 +23,7 @@ func testRunner(t *testing.T) *Runner {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"))
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
 	if err != nil {
 		t.Fatal(err)
 	}

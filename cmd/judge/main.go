@@ -22,6 +22,7 @@ import (
 	"github.com/JustModo/judge/internal/compare"
 	"github.com/JustModo/judge/internal/config"
 	"github.com/JustModo/judge/internal/lang"
+	"github.com/JustModo/judge/internal/lang/hooks"
 	"github.com/JustModo/judge/internal/metrics"
 	"github.com/JustModo/judge/internal/run"
 	"github.com/JustModo/judge/internal/sandbox"
@@ -49,7 +50,7 @@ func runJudge(configPath string, showLanguages bool) error {
 	}
 	log := newLogger(cfg.Log)
 
-	registry, err := lang.LoadRegistry(resolveRelative(configPath, cfg.Languages.Path))
+	registry, err := lang.LoadRegistry(resolveRelative(configPath, cfg.Languages.Path), hooks.All())
 	if err != nil {
 		return err
 	}

@@ -76,7 +76,7 @@ probe = ["go", "version"]
 
 A language needing behaviour a template cannot express — Java has to name its file
 after the public class — sets `hook` and implements it in
-[internal/lang/hook.go](internal/lang/hook.go).
+its own package under [internal/lang/hooks/](internal/lang/hooks/).
 
 Startup probes every configured toolchain and refuses to start if one is missing,
 rather than accepting submissions it cannot run.
@@ -114,6 +114,7 @@ cmd/judge          composition root: everything is constructed and injected here
 internal/judge     domain model, imports nothing but the standard library
 internal/config    judge.conf, validated at startup
 internal/lang      language registry and manifests
+internal/lang/hooks  language-specific Go code, one package each
 internal/sandbox   Sandbox interface, nsjail driver, cgroup control, local dev driver
 internal/run       compile-once pipeline and the compile cache
 internal/sched     memory admission and submission scheduling
