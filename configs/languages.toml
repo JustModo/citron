@@ -1,0 +1,82 @@
+# Language definitions.
+#
+# Adding a language is a block here plus its toolchain in the worker image. No Go
+# code, unless the language needs behaviour a template cannot express — then it also
+# sets `hook` (see internal/lang/hook.go).
+#
+# Template placeholders:
+#   {{.Source}}  source filename inside the workspace
+#   {{.Binary}}  compiled artifact name
+#   {{.Dir}}     workspace directory (inside the sandbox)
+#
+# Limit multipliers are applied to the configured execution limits. Runtimes with a
+# fixed startup cost (the JVM) need more than the baseline or every submission fails
+# for reasons that have nothing to do with the submitted code.
+
+[[language]]
+id = 50
+name = "c"
+label = "C (GCC)"
+source = "main.c"
+binary = "main"
+compile = ["gcc", "-O2", "-std=c17", "-w", "-o", "{{.Binary}}", "{{.Source}}", "-lm"]
+run = ["./{{.Binary}}"]
+probe = ["gcc", "--version"]
+
+[[language]]
+id = 54
+name = "cpp"
+label = "C++ (G++)"
+source = "main.cpp"
+binary = "main"
+compile = ["g++", "-O2", "-std=c++20", "-w", "-o", "{{.Binary}}", "{{.Source}}"]
+run = ["./{{.Binary}}"]
+probe = ["g++", "--version"]
+
+[[language]]
+id = 62
+name = "java"
+label = "Java (OpenJDK)"
+source = "Main.java"
+binary = "Main"
+compile = ["javac", "-nowarn", "-d", ".", "{{.Source}}"]
+# -XX:+UseSerialGC and -XX:ActiveProcessorCount=1 keep the JVM from spawning a GC
+# thread per core; each thread is a pid in the cgroup and the default set will not
+# fit under a competitive-programming process limit. TieredStopAtLevel=1 skips the
+# C2 compiler, which never pays off in a program that runs for a second.
+run = [
+    "java",
+    "-XX:+UseSerialGC",
+    "-XX:TieredStopAtLevel=1",
+    "-XX:ActiveProcessorCount=1",
+    "-XX:-UsePerfData",
+    "-Xss{{.StackKB}}k",
+    "-Xmx{{.HeapMB}}m",
+    "{{.Binary}}",
+]
+probe = ["java", "-version"]
+hook = "java"
+
+[language.limits]
+# The JVM needs headroom the heap flag does not cover: metaspace, code cache, thread
+# stacks and GC structures. Without it a "256 MB" Java limit is ~90 MB of usable heap.
+memory_extra_mb = 256
+# JVM threads are pids. 32 will not reliably start a JVM.
+max_processes = 64
+wall_multiplier = 2.0
+cpu_multiplier = 2.0
+
+[[language]]
+id = 71
+name = "python"
+label = "Python 3"
+source = "main.py"
+# Interpreted: no compile step, but the source is syntax-checked once per submission
+# so a syntax error is reported as a compilation error rather than N runtime errors.
+compile = ["python3", "-c", "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)", "{{.Source}}"]
+run = ["python3", "{{.Source}}"]
+probe = ["python3", "-VV"]
+
+[language.limits]
+memory_extra_mb = 32
+wall_multiplier = 1.5
