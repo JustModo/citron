@@ -27,12 +27,28 @@ type Options struct {
 	SubmissionLimit time.Duration
 }
 
+// Admitter reserves machine capacity for one execution. The runner asks before every
+// compile and every testcase, so the judge never starts work the machine cannot hold.
+// A nil Admitter means no admission control, which is only appropriate in tests.
+type Admitter interface {
+	Acquire(ctx context.Context, mem judge.MemoryBytes) (release func(), err error)
+}
+
+// admit reserves capacity, returning a no-op release when there is no admitter.
+func (r *Runner) admit(ctx context.Context, mem judge.MemoryBytes) (func(), error) {
+	if r.admitter == nil {
+		return func() {}, nil
+	}
+	return r.admitter.Acquire(ctx, mem)
+}
+
 type Runner struct {
 	registry   *lang.Registry
 	sandbox    sandbox.Sandbox
 	workspaces *workspace.Manager
 	cache      *CompileCache
 	comparator compare.Comparator
+	admitter   Admitter
 	opts       Options
 	log        *slog.Logger
 }
@@ -43,6 +59,7 @@ func NewRunner(
 	workspaces *workspace.Manager,
 	cache *CompileCache,
 	comparator compare.Comparator,
+	admitter Admitter,
 	opts Options,
 	log *slog.Logger,
 ) *Runner {
@@ -51,7 +68,8 @@ func NewRunner(
 	}
 	return &Runner{
 		registry: registry, sandbox: sb, workspaces: workspaces,
-		cache: cache, comparator: comparator, opts: opts, log: log,
+		cache: cache, comparator: comparator, admitter: admitter,
+		opts: opts, log: log,
 	}
 }
 
@@ -138,6 +156,14 @@ func (r *Runner) compile(
 			// through the cache so artifact lifetime has exactly one owner.
 			return judge.CompileResult{Skipped: true, Success: true}, nil
 		}
+		// Compilers are the most memory-hungry thing the judge runs; they reserve
+		// capacity like any other execution.
+		release, err := r.admit(ctx, r.opts.CompileLimits.Memory)
+		if err != nil {
+			return judge.CompileResult{}, fmt.Errorf("compile: %w", err)
+		}
+		defer release()
+
 		started := time.Now()
 		res, err := r.sandbox.Run(ctx, sandbox.Spec{
 			Dir: dir, Argv: argv, Env: sandboxEnv, Limits: r.opts.CompileLimits,
@@ -210,6 +236,12 @@ func (r *Runner) runOne(
 	limits judge.Limits,
 	tc judge.TestCase,
 ) (judge.TestCaseResult, error) {
+	release, err := r.admit(ctx, limits.Memory)
+	if err != nil {
+		return judge.TestCaseResult{}, err
+	}
+	defer release()
+
 	ws, err := r.workspaces.New("tc")
 	if err != nil {
 		return judge.TestCaseResult{}, err

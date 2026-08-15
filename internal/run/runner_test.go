@@ -35,7 +35,7 @@ func testRunner(t *testing.T) *Runner {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewRunner(registry, sandbox.NewLocal(log), ws, cache, compare.Default(), Options{
+	return NewRunner(registry, sandbox.NewLocal(log), ws, cache, compare.Default(), nil, Options{
 		CompileLimits: judge.Limits{
 			CPUTime: 20 * time.Second, WallTime: 25 * time.Second,
 			Memory: 512 << 20, Stack: 64 << 20, MaxProcesses: 128,
