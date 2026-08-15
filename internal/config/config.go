@@ -46,6 +46,13 @@ type Sandbox struct {
 	WorkspaceRoot    string `toml:"workspace_root"`
 	CacheRoot        string `toml:"cache_root"`
 	CacheEntries     int    `toml:"cache_entries"`
+
+	// ReadOnly and Symlinks build the filesystem a submission sees. They are
+	// configuration so that a language needing another path is a config change
+	// rather than a rebuild.
+	ReadOnly []string `toml:"readonly_paths"`
+	Symlinks []string `toml:"symlinks"`
+	TmpfsMB  int64    `toml:"tmpfs_mb"`
 }
 
 type Limits struct {
@@ -167,6 +174,9 @@ func Default() Config {
 			WorkspaceRoot: "/box",
 			CacheRoot:     "/box/cache",
 			CacheEntries:  256,
+			ReadOnly:      []string{"/usr", "/etc/alternatives", "/etc/java-21-openjdk"},
+			Symlinks:      []string{"/usr/bin:/bin", "/usr/lib:/lib", "/usr/lib64:/lib64", "/usr/sbin:/sbin"},
+			TmpfsMB:       64,
 		},
 		Limits: Limits{
 			Execution: ExecutionLimits{

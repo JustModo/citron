@@ -27,6 +27,9 @@ done < $CG/cgroup.procs
 
 echo "+memory +pids +cpu" > $CG/cgroup.subtree_control
 mkdir -p $CG/judge
+# Controllers must be enabled at every level: a per-execution cgroup only gets
+# memory.max if its parent delegates the memory controller downwards too.
+echo "+memory +pids +cpu" > $CG/judge/cgroup.subtree_control
 chown -R judge:judge $CG/judge
 
 exec "$@"
