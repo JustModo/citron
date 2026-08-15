@@ -252,9 +252,10 @@ func (r *Runner) runOne(
 		return judge.TestCaseResult{}, err
 	}
 
+	// The artifact is copied in above, so it is NOT also bind-mounted: mounting it
+	// would expose the cache's directory layout inside the workspace for no gain.
 	res, err := r.sandbox.Run(ctx, sandbox.Spec{
-		Dir: ws.Dir, ReadOnly: []string{compiled.Dir},
-		Argv: argv, Stdin: tc.Stdin, Env: sandboxEnv, Limits: limits,
+		Dir: ws.Dir, Argv: argv, Stdin: tc.Stdin, Env: sandboxEnv, Limits: limits,
 	})
 	if err != nil {
 		return judge.TestCaseResult{}, err
