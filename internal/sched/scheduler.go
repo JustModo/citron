@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/JustModo/judge/internal/judge"
 )
@@ -32,8 +33,9 @@ type Runner interface {
 // ponytail: FIFO plus per-submission caps. Add weighted round-robin only if queue
 // wait for small submissions actually regresses behind a large neighbour.
 type Scheduler struct {
-	runner Runner
-	slots  chan struct{}
+	runner       Runner
+	slots        chan struct{}
+	maxQueueWait time.Duration
 
 	wg       sync.WaitGroup
 	draining atomic.Bool
@@ -41,11 +43,19 @@ type Scheduler struct {
 	queued   atomic.Int64
 }
 
-func NewScheduler(runner Runner, maxConcurrent int) *Scheduler {
+// NewScheduler bounds concurrent submissions, and bounds how long one may wait for a
+// slot. The wait matters as much as the limit: without it an overloaded judge keeps
+// accepting work and every client eventually times out having been told nothing,
+// which is worse than being refused immediately.
+func NewScheduler(runner Runner, maxConcurrent int, maxQueueWait time.Duration) *Scheduler {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
-	return &Scheduler{runner: runner, slots: make(chan struct{}, maxConcurrent)}
+	return &Scheduler{
+		runner:       runner,
+		slots:        make(chan struct{}, maxConcurrent),
+		maxQueueWait: maxQueueWait,
+	}
 }
 
 // Submit runs a submission, waiting for a slot if necessary.
@@ -54,12 +64,26 @@ func (s *Scheduler) Submit(ctx context.Context, sub judge.Submission) (judge.Sub
 		return judge.SubmissionResult{}, ErrDraining
 	}
 
+	// Bounded wait. Past this the judge is not going to get to this submission in
+	// time to be useful, so it says so rather than holding the connection until the
+	// client gives up.
+	waitCtx := ctx
+	if s.maxQueueWait > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, s.maxQueueWait)
+		defer cancel()
+	}
+
 	s.queued.Add(1)
 	select {
 	case s.slots <- struct{}{}:
 		s.queued.Add(-1)
-	case <-ctx.Done():
+	case <-waitCtx.Done():
 		s.queued.Add(-1)
+		if ctx.Err() == nil {
+			// The caller is still waiting; it was our own queue limit that expired.
+			return judge.SubmissionResult{}, ErrOverloaded
+		}
 		return judge.SubmissionResult{}, ctx.Err()
 	}
 	defer func() { <-s.slots }()

@@ -158,7 +158,7 @@ func testSubmission(id string) judge.Submission {
 
 func TestSchedulerBoundsConcurrentSubmissions(t *testing.T) {
 	r := &fakeRunner{delay: 50 * time.Millisecond}
-	s := NewScheduler(r, 2)
+	s := NewScheduler(r, 2, 0)
 
 	var wg sync.WaitGroup
 	for i := range 10 {
@@ -183,7 +183,7 @@ func TestSchedulerBoundsConcurrentSubmissions(t *testing.T) {
 func TestDrainWaitsForRunningWorkAndRefusesNew(t *testing.T) {
 	block := make(chan struct{})
 	r := &fakeRunner{block: block}
-	s := NewScheduler(r, 4)
+	s := NewScheduler(r, 4, 0)
 
 	finished := make(chan error, 1)
 	go func() {
@@ -226,7 +226,7 @@ func TestDrainWaitsForRunningWorkAndRefusesNew(t *testing.T) {
 
 func TestDrainTimesOutRatherThanHanging(t *testing.T) {
 	r := &fakeRunner{block: make(chan struct{})} // never released
-	s := NewScheduler(r, 2)
+	s := NewScheduler(r, 2, 0)
 
 	go s.Submit(context.Background(), testSubmission("stuck"))
 	for s.Active() == 0 {
@@ -244,7 +244,7 @@ func TestTrySubmitRefusesInsteadOfQueuing(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
 	r := &fakeRunner{block: block}
-	s := NewScheduler(r, 1)
+	s := NewScheduler(r, 1, 0)
 
 	go s.TrySubmit(context.Background(), testSubmission("first"))
 	for s.Active() == 0 {
@@ -259,14 +259,14 @@ func TestTrySubmitRefusesInsteadOfQueuing(t *testing.T) {
 // A large submission must not stop small ones from being served.
 func TestSmallSubmissionsAreNotStarvedByALargeOne(t *testing.T) {
 	r := &fakeRunner{delay: 10 * time.Millisecond}
-	s := NewScheduler(r, 2)
+	s := NewScheduler(r, 2, 0)
 
 	big := make(chan struct{})
 	go func() {
 		defer close(big)
 		// Stands in for a submission with very many testcases.
 		slow := &fakeRunner{delay: 500 * time.Millisecond}
-		NewScheduler(slow, 1).Submit(context.Background(), testSubmission("big"))
+		NewScheduler(slow, 1, 0).Submit(context.Background(), testSubmission("big"))
 	}()
 
 	start := time.Now()
@@ -281,4 +281,50 @@ func TestSmallSubmissionsAreNotStarvedByALargeOne(t *testing.T) {
 		t.Errorf("small submissions took %v while a large one was running", elapsed)
 	}
 	<-big
+}
+
+// Under sustained overload the judge must refuse work rather than queue it forever.
+// Without this, every client waits out its own timeout having been told nothing —
+// which looks identical to the judge being down.
+func TestQueueWaitShedsLoadInsteadOfHangingClients(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	r := &fakeRunner{block: block}
+	s := NewScheduler(r, 1, 50*time.Millisecond)
+
+	go s.Submit(context.Background(), testSubmission("occupier"))
+	for s.Active() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	start := time.Now()
+	_, err := s.Submit(context.Background(), testSubmission("queued"))
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrOverloaded) {
+		t.Errorf("got %v, want ErrOverloaded", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("waited %v; the queue bound was 50ms", elapsed)
+	}
+}
+
+// A caller that gives up first should see its own cancellation, not a misleading
+// "overloaded" that blames the judge.
+func TestClientCancellationIsNotReportedAsOverload(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	r := &fakeRunner{block: block}
+	s := NewScheduler(r, 1, time.Minute)
+
+	go s.Submit(context.Background(), testSubmission("occupier"))
+	for s.Active() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := s.Submit(ctx, testSubmission("impatient")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("got %v, want the caller's own deadline error", err)
+	}
 }

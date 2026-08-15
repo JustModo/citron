@@ -92,9 +92,13 @@ type SubmissionLimits struct {
 }
 
 type Scheduler struct {
-	MaxConcurrentSubmissions int   `toml:"max_concurrent_submissions"`
-	ExecutionSlots           int   `toml:"execution_slots"`
-	MemoryBudgetMB           int64 `toml:"memory_budget_mb"`
+	MaxConcurrentSubmissions int `toml:"max_concurrent_submissions"`
+	// MaxQueueWaitSec bounds how long a submission waits for a slot. Past it the
+	// judge refuses with 503 instead of holding the connection until the client
+	// times out having been told nothing.
+	MaxQueueWaitSec float64 `toml:"max_queue_wait_seconds"`
+	ExecutionSlots  int     `toml:"execution_slots"`
+	MemoryBudgetMB  int64   `toml:"memory_budget_mb"`
 }
 
 type Jobs struct {
@@ -158,6 +162,8 @@ func (c Config) SubmissionDeadline() time.Duration {
 
 func (c Config) ShutdownGrace() time.Duration { return secs(c.Server.ShutdownSec) }
 
+func (c Config) QueueWait() time.Duration { return secs(c.Scheduler.MaxQueueWaitSec) }
+
 // Default returns a configuration sized for the 2 vCPU / 8 GB baseline.
 func Default() Config {
 	return Config{
@@ -198,6 +204,7 @@ func Default() Config {
 		},
 		Scheduler: Scheduler{
 			MaxConcurrentSubmissions: 2,
+			MaxQueueWaitSec:          15,
 			ExecutionSlots:           2,
 			MemoryBudgetMB:           1024,
 		},
@@ -262,6 +269,10 @@ func (c Config) Validate() error {
 		{c.Limits.Submission.MaxTotalWallTimeSec > 0, "limits.submission.max_total_wall_time_seconds must be > 0"},
 		{c.Scheduler.MaxConcurrentSubmissions > 0, "scheduler.max_concurrent_submissions must be > 0"},
 		{c.Scheduler.ExecutionSlots > 0, "scheduler.execution_slots must be > 0"},
+		{c.Scheduler.MaxQueueWaitSec > 0, "scheduler.max_queue_wait_seconds must be > 0"},
+		// Queue wait plus execution must still fit inside the client's patience.
+		{c.Scheduler.MaxQueueWaitSec < c.Limits.Submission.MaxTotalWallTimeSec,
+			"scheduler.max_queue_wait_seconds must be < limits.submission.max_total_wall_time_seconds"},
 		{c.Jobs.MaxAttempts > 0, "jobs.max_attempts must be > 0"},
 		{c.Languages.Path != "", "languages.path is required"},
 		// A submission that cannot fit in the budget would block forever at admission.
