@@ -24,10 +24,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nsjail /src/nsjail/nsjail /usr/local/bin/nsjail
-COPY docker/worker/spike.sh /opt/judge/spike.sh
-RUN chmod +x /opt/judge/spike.sh
+COPY docker/worker/spike.sh docker/worker/entrypoint.sh /opt/judge/
+RUN chmod +x /opt/judge/spike.sh /opt/judge/entrypoint.sh
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin judge
 
 ENV JUDGE_SANDBOX_DRIVER=nsjail
 WORKDIR /opt/judge
+ENTRYPOINT ["/opt/judge/entrypoint.sh"]
