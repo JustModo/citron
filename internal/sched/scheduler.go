@@ -30,8 +30,6 @@ type Runner interface {
 // here, and a cap on concurrent testcases per submission inside the runner. A
 // thousand-testcase submission therefore occupies one submission slot and a handful
 // of executions, leaving room for the ten-testcase submissions behind it.
-// ponytail: FIFO plus per-submission caps. Add weighted round-robin only if queue
-// wait for small submissions actually regresses behind a large neighbour.
 type Scheduler struct {
 	runner       Runner
 	slots        chan struct{}

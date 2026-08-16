@@ -21,8 +21,6 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# Static and reproducible: no libc dependency to keep in step with the runtime image,
-# and -trimpath so the binary carries no build-host paths.
 RUN CGO_ENABLED=0 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/citron ./cmd/citron \
@@ -38,8 +36,6 @@ LABEL org.opencontainers.image.title="citron" \
       org.opencontainers.image.source="https://github.com/JustModo/citron" \
       org.opencontainers.image.licenses="MIT"
 
-# Toolchains, plus nsjail's runtime dependencies. The -dev packages are used to pull
-# the right sonames without guessing versioned runtime package names.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ python3 openjdk-21-jdk-headless \
         libprotobuf-dev libnl-route-3-dev \

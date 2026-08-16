@@ -1,9 +1,4 @@
 #!/bin/bash
-# Phase 0 sandbox spike: prove nsjail + cgroup v2 work in a non-privileged container.
-# Exit code is the number of failed checks.
-#
-# Every bomb check first runs a control command through the SAME jail flags, so a
-# jail that fails to launch is reported as a broken jail, never as "bomb contained".
 set -u
 
 fails=0
@@ -13,14 +8,6 @@ pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1"; fails=$((fails + 1)); }
 check() { if [ "$1" -eq 0 ]; then pass "$2"; else fail "$2"; fi; }
 
-# --no_pivotroot: pivot_root is EPERM inside a container; nsjail falls back to
-# MS_MOVE + chroot. Weaker on paper, but the process still has no capabilities,
-# a private mount namespace and seccomp on top.
-# --no_pivotroot: pivot_root is EPERM inside a container; nsjail falls back to
-#   MS_MOVE + chroot. The process still has no capabilities, a private mount
-#   namespace and seccomp on top.
-# --chroot /: the image root, mounted READ-ONLY (nsjail's default for chroot).
-#   The writable workspace is bind-mounted in separately per execution.
 JAIL_BASE="--mode o --quiet --user 65534 --group 65534 --iface_no_lo
            --disable_clone_newcgroup --no_pivotroot --chroot / --rlimit_as max"
 JAIL_CG="--use_cgroupv2 --cgroupv2_mount=$CG"

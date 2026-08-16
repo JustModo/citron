@@ -1,9 +1,3 @@
-# A single container serves the API and executes submissions.
-#
-# It needs a few specific grants so nsjail can build its namespaces. Each is explained
-# in docs/sandbox.md; none of them is `privileged: true`, and the Docker socket is
-# never mounted.
-
 services:
   citron:
     build:
@@ -12,37 +6,18 @@ services:
     image: citron:latest
     restart: unless-stopped
 
-    # Namespace creation. This is the only capability required, and it is far
-    # narrower than running the container privileged.
     cap_add: [SYS_ADMIN]
     security_opt:
-      # docker-default denies mount(), which nsjail needs to build the jail.
       - apparmor=unconfined
-      # Docker masks /proc/kcore and friends by bind-mounting /dev/null over them,
-      # which makes mounting a fresh procfs inside the jail EPERM. Unmasking applies
-      # to this container, which is trusted; the jailed process still gets its own
-      # procfs in its own PID namespace.
       - systempaths=unconfined
     cgroup: private
 
-    # citron.conf binds loopback, which is the right default for running the binary on
-    # a host. Inside a container the network namespace is the boundary, so the process
-    # binds the container's 0.0.0.0 and the published port below decides who can
-    # actually reach it.
     command: ["citron", "-config", "/opt/citron/configs/citron.conf", "-address", "0.0.0.0:2358"]
 
-    # Untrusted code runs here. The published port is bound to the host's loopback:
-    # change it to an internal network for the application, never to a public
-    # interface.
     networks: [citron]
     ports:
       - "127.0.0.1:2358:2358"
 
-    # Workspaces and the compile cache are disposable, so they live in RAM. The size
-    # cap matters: it is what stops a submission writing files until the disk fills.
-    # `exec` is required: Docker mounts tmpfs noexec by default, which would stop a
-    # compiled submission from running its own binary. Interpreted languages would
-    # still work, so this fails in a way that looks language-specific.
     tmpfs:
       - /box:size=2g,mode=1777,exec
 
@@ -50,8 +25,6 @@ services:
       - ./configs/citron.conf:/opt/citron/configs/citron.conf:ro
       - ./configs/languages.toml:/opt/citron/configs/languages.toml:ro
 
-    # Sized for the 2 vCPU / 8 GB baseline. Keep mem_limit above
-    # scheduler.memory_budget_mb plus room for the JVM's non-heap overhead.
     cpus: 2
     mem_limit: 3g
 

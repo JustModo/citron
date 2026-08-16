@@ -201,8 +201,6 @@ func (c *CompileCache) evict() {
 // Copying rather than sharing the directory keeps every testcase's writable state
 // private, which is the whole point of a fresh workspace. Artifacts here are
 // kilobytes, so the cost is noise.
-// ponytail: copy per testcase. Bind-mount the entry read-only via Spec.ReadOnly if
-// artifacts ever get big enough for this to show up in a benchmark.
 func CopyInto(entry Entry, dir string) error {
 	files, err := os.ReadDir(entry.Dir)
 	if err != nil {
