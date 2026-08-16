@@ -1,0 +1,37 @@
+services:
+  citron-high:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+    image: citron:latest
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]
+    security_opt:
+      - apparmor=unconfined
+      - systempaths=unconfined
+    cgroup: private
+    command: ["citron", "-config", "/opt/citron/configs/citron-high.conf", "-address", "0.0.0.0:2358"]
+    networks: [citron]
+    ports:
+      - "127.0.0.1:2358:2358"
+    tmpfs:
+      - /box:size=8g,mode=1777,exec
+    volumes:
+      - ../configs/citron-high.conf:/opt/citron/configs/citron-high.conf:ro
+      - ../../../configs/languages.toml:/opt/citron/configs/languages.toml:ro
+    mem_limit: 16g
+    healthcheck:
+      test: ["CMD", "citron", "-config", "/opt/citron/configs/citron-high.conf", "-languages"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
+
+networks:
+  citron:
+    driver: bridge
