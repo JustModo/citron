@@ -95,10 +95,6 @@ This service executes untrusted code.
 [configs/citron.conf](configs/citron.conf) holds every operational setting: limits,
 concurrency, sandbox paths and logging. Nothing important is hardcoded.
 
-Scale by raising `execution_slots` and `max_concurrent_submissions` towards the core
-count. See [docs/benchmarks.md](docs/benchmarks.md) for measured throughput and the
-point where returns stop.
-
 ## Make targets
 
 | Target | Purpose |
