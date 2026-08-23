@@ -2,19 +2,28 @@
 set -u
 
 fails=0
-CG=/sys/fs/cgroup/citron
 
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1"; fails=$((fails + 1)); }
 check() { if [ "$1" -eq 0 ]; then pass "$2"; else fail "$2"; fi; }
 
+cgroup_fs=$(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo "unknown")
+if [ "$cgroup_fs" = "cgroup2fs" ] || [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+    cg_version="v2"
+    CG=/sys/fs/cgroup/citron
+    JAIL_CG="--use_cgroupv2 --cgroupv2_mount=$CG"
+else
+    cg_version="v1"
+    CG=/sys/fs/cgroup
+    JAIL_CG="--cgroup_mem_parent=citron --cgroup_pids_parent=citron"
+fi
+
 JAIL_BASE="--mode o --quiet --user 65534 --group 65534 --iface_no_lo
            --disable_clone_newcgroup --no_pivotroot --chroot / --rlimit_as max"
-JAIL_CG="--use_cgroupv2 --cgroupv2_mount=$CG"
 
 echo "== environment =="
 echo "kernel:    $(uname -r)"
-echo "cgroup fs: $(stat -fc %T /sys/fs/cgroup)"
+echo "cgroup fs: $cgroup_fs ($cg_version)"
 echo "nsjail:    $(nsjail --help 2>&1 | grep -oP 'nsjail version \S+' | head -1)"
 echo
 
@@ -28,12 +37,20 @@ else
 fi
 
 echo
-echo "== 2. cgroup v2 delegation =="
-[ -d "$CG" ] && [ -w "$CG" ]
-check $? "delegated cgroup $CG exists and is writable"
-grep -q memory /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null
-check $? "memory controller delegated to children"
-echo "      subtree_control: $(cat /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null)"
+if [ "$cg_version" = "v2" ]; then
+    echo "== 2. cgroup v2 delegation =="
+    [ -d "$CG" ] && [ -w "$CG" ]
+    check $? "delegated cgroup $CG exists and is writable"
+    grep -q memory /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null
+    check $? "memory controller delegated to children"
+    echo "      subtree_control: $(cat /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null)"
+else
+    echo "== 2. cgroup v1 hierarchies =="
+    [ -d "$CG/memory/citron" ] && [ -w "$CG/memory/citron" ]
+    check $? "delegated cgroup $CG/memory/citron exists and is writable"
+    [ -d "$CG/pids/citron" ] && [ -w "$CG/pids/citron" ]
+    check $? "delegated cgroup $CG/pids/citron exists and is writable"
+fi
 
 echo
 echo "== 3. jail works WITH cgroup limits (control) =="
@@ -97,13 +114,23 @@ check $? "outbound TCP blocked inside jail"
 
 echo
 echo "== 7. memory accounting readback =="
-probe=$CG/probe
-if mkdir -p $probe 2>/dev/null && [ -f $probe/memory.peak ]; then
-    pass "memory.peak available for per-execution accounting"
+if [ "$cg_version" = "v2" ]; then
+    probe=$CG/probe
+    if mkdir -p $probe 2>/dev/null && ([ -f $probe/memory.peak ] || [ -f $probe/memory.current ]); then
+        pass "memory accounting available for per-execution metrics"
+    else
+        fail "memory accounting available for per-execution metrics"
+    fi
+    rmdir $probe 2>/dev/null
 else
-    fail "memory.peak available for per-execution accounting"
+    probe=/sys/fs/cgroup/memory/citron/probe
+    if mkdir -p $probe 2>/dev/null && ([ -f $probe/memory.max_usage_in_bytes ] || [ -f $probe/memory.usage_in_bytes ]); then
+        pass "memory accounting available for per-execution metrics"
+    else
+        fail "memory accounting available for per-execution metrics"
+    fi
+    rmdir $probe 2>/dev/null
 fi
-rmdir $probe 2>/dev/null
 
 echo
 echo "failures: $fails"

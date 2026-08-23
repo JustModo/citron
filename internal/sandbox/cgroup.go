@@ -1,8 +1,11 @@
 package sandbox
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,153 +14,193 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// cgroup is one execution's resource container.
-//
-// Citron creates it, places the process into it at clone time, and reads the
-// accounting back afterwards. Doing this here rather than delegating to nsjail buys
-// three things: memory.peak counts exactly the pages this execution touched,
-// memory.events says whether the kernel OOM-killed it, and cgroup.kill terminates
-// every descendant at once — a process tree cannot outrun it the way it can outrun
-// signalling a process group.
-type cgroup struct {
-	dir string
-	fd  *os.File
+// cgroup is one execution's resource container: its limits, its accounting, and
+// the kill that takes the whole process tree with it.
+type cgroup interface {
+	Prepare(cmd *exec.Cmd)
+	Place(pid int) error
+
+	CPUTime() time.Duration
+	PeakMemory() judge.MemoryBytes
+	OOMKilled() bool
+
+	Kill() error
+	Close() error
 }
 
-func newCgroup(root, name string, mem judge.MemoryBytes, maxPIDs int) (*cgroup, error) {
-	dir := filepath.Join(root, name)
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("cgroup: %w", err)
-	}
-	c := &cgroup{dir: dir}
+// cgroupManager creates one cgroup per execution. Resolved once at startup.
+type cgroupManager interface {
+	New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup, error)
+	Version() string
+}
 
-	if mem > 0 {
-		if err := c.write("memory.max", strconv.FormatInt(int64(mem), 10)); err != nil {
-			c.remove()
-			return nil, err
-		}
-		// Without this a submission over its limit is swapped rather than killed,
-		// which turns a memory bomb into a machine-wide slowdown.
-		if err := c.write("memory.swap.max", "0"); err != nil && !os.IsNotExist(err) {
-			c.remove()
-			return nil, err
-		}
-	}
-	if maxPIDs > 0 {
-		if err := c.write("pids.max", strconv.Itoa(maxPIDs)); err != nil {
-			c.remove()
-			return nil, err
-		}
-	}
+// v1Hierarchies are the controllers a v1 host must delegate, each with a file that
+// proves the controller is attached to the hierarchy it was found on.
+var v1Hierarchies = []struct{ controller, probeFile string }{
+	{"memory", "memory.limit_in_bytes"},
+	{"pids", "pids.max"},
+	{"cpuacct", "cpuacct.usage"},
+}
 
-	fd, err := os.Open(dir)
+// newCgroupManager picks a backend for this host, preferring v2. It runs at startup
+// so a misconfigured deployment fails loudly rather than leaving limits unenforced.
+func newCgroupManager(root string) (cgroupManager, error) {
+	mounts, err := os.Open("/proc/self/mounts")
 	if err != nil {
-		c.remove()
 		return nil, fmt.Errorf("cgroup: %w", err)
 	}
-	c.fd = fd
-	return c, nil
+	defer mounts.Close()
+	unified, v1, err := parseCgroupMounts(mounts)
+	if err != nil {
+		return nil, fmt.Errorf("cgroup: reading mounts: %w", err)
+	}
+
+	var v2Err error
+	if unified != "" && within(unified, root) {
+		if v2Err = probeCgroup(root, "memory.max", "pids.max", "cpu.stat"); v2Err == nil {
+			return &managerV2{root: root}, nil
+		}
+	}
+
+	name := filepath.Base(root)
+	dirs := make(map[string]string, len(v1Hierarchies))
+	for _, h := range v1Hierarchies {
+		mount, ok := v1[h.controller]
+		if !ok {
+			return nil, cgroupUnavailable(root, v2Err,
+				fmt.Errorf("no cgroup v1 %s mount", h.controller))
+		}
+		dir := filepath.Join(mount, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, cgroupUnavailable(root, v2Err, err)
+		}
+		if err := probeCgroup(dir, h.probeFile); err != nil {
+			return nil, cgroupUnavailable(root, v2Err, err)
+		}
+		dirs[h.controller] = dir
+	}
+	return &managerV1{dirs: dirs}, nil
 }
 
-func (c *cgroup) write(file, value string) error {
-	if err := os.WriteFile(filepath.Join(c.dir, file), []byte(value), 0o644); err != nil {
+func cgroupUnavailable(root string, v2Err, v1Err error) error {
+	if v2Err == nil {
+		v2Err = fmt.Errorf("%s is not under a cgroup2 mount", root)
+	}
+	return fmt.Errorf("cgroup: no usable hierarchy: v2: %w; v1: %w", v2Err, v1Err)
+}
+
+// probeCgroup creates a real child group: a delegated parent is indistinguishable
+// from an undelegated one until you look inside one of its children.
+func probeCgroup(dir string, files ...string) error {
+	probe := filepath.Join(dir, "citron-probe")
+	if err := os.Mkdir(probe, 0o755); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("cgroup root %s is not writable: %w", dir, err)
+	}
+	defer os.Remove(probe)
+
+	for _, f := range files {
+		if _, err := os.Stat(filepath.Join(probe, f)); err != nil {
+			return fmt.Errorf("cgroup root %s has no %s; controllers are not delegated", dir, f)
+		}
+	}
+	return nil
+}
+
+// parseCgroupMounts reports the cgroup2 mountpoint, if any, and where each v1
+// controller is mounted. One v1 mount can carry several ("cpu,cpuacct").
+func parseCgroupMounts(r io.Reader) (unified string, v1 map[string]string, err error) {
+	v1 = map[string]string{}
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) < 4 {
+			continue
+		}
+		point := unescapeMount(f[1])
+		switch f[2] {
+		case "cgroup2":
+			if unified == "" {
+				unified = point
+			}
+		case "cgroup":
+			for opt := range strings.SplitSeq(f[3], ",") {
+				if _, seen := v1[opt]; !seen {
+					v1[opt] = point
+				}
+			}
+		}
+	}
+	return unified, v1, sc.Err()
+}
+
+func unescapeMount(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func within(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// readCgroupFile surfaces read errors: a backend pointed at the wrong filenames
+// must not look like a submission that used no memory.
+func readCgroupFile(dir, file string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, file))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+// cgroupNumber parses a control file holding a single integer.
+func cgroupNumber(s string) (int64, bool) {
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil
+}
+
+// cgroupStat pulls one "key value" field out of a multi-line control file.
+func cgroupStat(content, key string) (int64, bool) {
+	for line := range strings.SplitSeq(content, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || k != key {
+			continue
+		}
+		return cgroupNumber(v)
+	}
+	return 0, false
+}
+
+func writeCgroupFile(dir, file, value string) error {
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(value), 0o644); err != nil {
 		return fmt.Errorf("cgroup: writing %s: %w", file, err)
 	}
 	return nil
 }
 
-func (c *cgroup) read(file string) string {
-	b, err := os.ReadFile(filepath.Join(c.dir, file))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// PeakMemory is the high-water mark of memory actually touched by this execution.
-func (c *cgroup) PeakMemory() judge.MemoryBytes {
-	if v, err := strconv.ParseInt(c.read("memory.peak"), 10, 64); err == nil {
-		return judge.MemoryBytes(v)
-	}
-	// Pre-5.19 kernels have no memory.peak. current is a poor substitute after the
-	// process has exited, but it is better than reporting zero.
-	if v, err := strconv.ParseInt(c.read("memory.current"), 10, 64); err == nil {
-		return judge.MemoryBytes(v)
-	}
-	return 0
-}
-
-// OOMKilled reports whether the kernel killed something for exceeding memory.max.
-// This is what separates "ran out of memory" from an ordinary crash.
-func (c *cgroup) OOMKilled() bool {
-	for line := range strings.SplitSeq(c.read("memory.events"), "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok || (key != "oom_kill" && key != "oom_group_kill") {
-			continue
-		}
-		if n, err := strconv.Atoi(value); err == nil && n > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// CPUTime is the total CPU consumed by every process in the cgroup, which is what a
-// multi-threaded or forking submission actually costs.
-func (c *cgroup) CPUTime() time.Duration {
-	for line := range strings.SplitSeq(c.read("cpu.stat"), "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok || key != "usage_usec" {
-			continue
-		}
-		if usec, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return time.Duration(usec) * time.Microsecond
-		}
-	}
-	return 0
-}
-
-// Kill terminates every process in the cgroup atomically. A fork bomb cannot escape
-// it: there is no window in which a new child lands outside the set being killed.
-func (c *cgroup) Kill() error {
-	return c.write("cgroup.kill", "1")
-}
-
-func (c *cgroup) Close() error {
-	if c.fd != nil {
-		_ = c.fd.Close()
-	}
-	return c.remove()
-}
-
-// remove retries briefly: the kernel refuses to remove a cgroup until the last
-// process in it is fully reaped, which can lag the parent's wait by a moment.
-func (c *cgroup) remove() error {
+// removeCgroupDir retries: the kernel refuses removal until the last process in the
+// cgroup is fully reaped, which can lag the parent's wait.
+func removeCgroupDir(dir string, kill func() error) error {
 	var err error
 	for range 50 {
-		if err = os.Remove(c.dir); err == nil || os.IsNotExist(err) {
+		if err = os.Remove(dir); err == nil || os.IsNotExist(err) {
 			return nil
 		}
-		_ = c.Kill()
+		_ = kill()
 		time.Sleep(10 * time.Millisecond)
 	}
-	return fmt.Errorf("cgroup: removing %s: %w", c.dir, err)
-}
-
-// CgroupAvailable reports whether root is a usable delegated cgroup v2 directory.
-// The composition root calls this at startup so a misconfigured deployment fails
-// loudly instead of running submissions with unenforced memory limits.
-func CgroupAvailable(root string) error {
-	probe := filepath.Join(root, "citron-probe")
-	if err := os.Mkdir(probe, 0o755); err != nil {
-		return fmt.Errorf("cgroup root %s is not writable: %w", root, err)
-	}
-	defer os.Remove(probe)
-
-	for _, f := range []string{"memory.max", "pids.max"} {
-		if _, err := os.Stat(filepath.Join(probe, f)); err != nil {
-			return fmt.Errorf("cgroup root %s has no %s; controllers are not delegated", root, f)
-		}
-	}
-	return nil
+	return fmt.Errorf("cgroup: removing %s: %w", dir, err)
 }

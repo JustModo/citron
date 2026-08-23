@@ -6,7 +6,7 @@ SANDBOX_FLAGS := --cap-add=SYS_ADMIN \
 	--security-opt systempaths=unconfined \
 	--cgroupns=private
 
-.PHONY: build test test-race lint integration security image spike up down clean
+.PHONY: build test test-race lint integration security image spike up down clean smoke
 
 build:
 	go build -o $(BIN) ./cmd/citron
@@ -38,6 +38,9 @@ up:
 
 down:
 	docker compose down
+
+smoke:
+	node tests/smoke/smoke.mjs
 
 clean:
 	rm -rf bin dist

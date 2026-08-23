@@ -37,9 +37,10 @@ type NsjailConfig struct {
 
 // Nsjail runs each execution in its own namespaces and its own cgroup.
 type Nsjail struct {
-	cfg NsjailConfig
-	log *slog.Logger
-	seq atomic.Uint64
+	cfg     NsjailConfig
+	cgroups cgroupManager
+	log     *slog.Logger
+	seq     atomic.Uint64
 }
 
 func NewNsjail(cfg NsjailConfig, log *slog.Logger) (*Nsjail, error) {
@@ -49,13 +50,15 @@ func NewNsjail(cfg NsjailConfig, log *slog.Logger) (*Nsjail, error) {
 	if _, err := exec.LookPath(cfg.Path); err != nil {
 		return nil, fmt.Errorf("nsjail: %w", err)
 	}
-	if err := CgroupAvailable(cfg.CgroupRoot); err != nil {
+	cgroups, err := newCgroupManager(cfg.CgroupRoot)
+	if err != nil {
 		return nil, err
 	}
+	log.Info("cgroup backend", "version", cgroups.Version(), "root", cfg.CgroupRoot)
 	if cfg.TmpfsMB <= 0 {
 		cfg.TmpfsMB = 64
 	}
-	n := &Nsjail{cfg: cfg, log: log}
+	n := &Nsjail{cfg: cfg, cgroups: cgroups, log: log}
 	if err := n.selfTest(); err != nil {
 		return nil, err
 	}
@@ -112,7 +115,7 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 
 	name := fmt.Sprintf("exec-%d-%d", os.Getpid(), n.seq.Add(1))
-	cg, err := newCgroup(n.cfg.CgroupRoot, name, spec.Limits.Memory, spec.Limits.MaxProcesses)
+	cg, err := n.cgroups.New(name, spec.Limits.Memory, spec.Limits.MaxProcesses)
 	if err != nil {
 		return Result{}, err
 	}
@@ -151,15 +154,14 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 		jailLog <- b
 	}()
 
-	// The process is placed into the cgroup by the kernel at clone time, so there is
-	// no window in which it runs unaccounted or unbounded.
-	cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: int(cg.fd.Fd())}
+	// On v2 the kernel places the process at clone time, leaving no unaccounted window.
+	cg.Prepare(cmd)
 	// Killing the cgroup rather than the process takes every descendant with it.
 	cmd.Cancel = cg.Kill
 	cmd.WaitDelay = 2 * time.Second
 
 	start := time.Now()
-	runErr := cmd.Run()
+	runErr := runJail(cmd, cg)
 	wall := time.Since(start)
 
 	// Closing the write end lets the log reader see EOF.
@@ -233,6 +235,20 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 
 	return res, nil
+}
+
+// runJail starts the jail, ensures it is inside the cgroup, and waits for it.
+func runJail(cmd *exec.Cmd, cg cgroup) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// A failed placement leaves the execution unlimited; it must not run on.
+	if err := cg.Place(cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	return cmd.Wait()
 }
 
 func (n *Nsjail) args(spec Spec) ([]string, error) {

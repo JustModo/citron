@@ -86,7 +86,8 @@ This service executes untrusted code.
 - Each testcase runs in a fresh writable workspace. Compiled artifacts are shared;
   mutable state never is.
 - CPU, wall clock, memory, process count, file size and output are all bounded.
-  Memory and process limits are enforced by cgroups v2.
+  Memory and process limits are enforced by cgroups: v2 where available, v1 as a
+  fallback, chosen automatically at startup.
 
 `make security` runs the containment suite against a running instance.
 
@@ -105,7 +106,7 @@ concurrency, sandbox paths and logging. Nothing important is hardcoded.
 | `up` / `down` | Start and stop with Compose |
 | `integration` | Tests requiring real toolchains |
 | `security` | Containment suite, against a running instance |
-| `spike` | Verify nsjail and cgroup v2 work on this host |
+| `spike` | Verify nsjail and cgroups work on this host |
 | `image` | Build the container image |
 
 ## Layout
