@@ -12,7 +12,7 @@ import (
 )
 
 func TestAdmissionBoundsConcurrentMemory(t *testing.T) {
-	a := NewAdmitter(512, 10) // 512 MB, plenty of slots
+	a := NewAdmitter(512, 10)
 
 	r1, err := a.Acquire(context.Background(), 256<<20)
 	if err != nil {
@@ -26,7 +26,7 @@ func TestAdmissionBoundsConcurrentMemory(t *testing.T) {
 		t.Errorf("reserved %d MB, want 512", got)
 	}
 
-	// The budget is spent; a third execution must wait rather than over-commit.
+	// The budget is spent; a third execution must wait.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := a.Acquire(ctx, 256<<20); !errors.Is(err, context.DeadlineExceeded) {
@@ -41,7 +41,7 @@ func TestAdmissionBoundsConcurrentMemory(t *testing.T) {
 }
 
 func TestExecutionSlotsBoundConcurrency(t *testing.T) {
-	a := NewAdmitter(10_000, 2) // memory is not the constraint here
+	a := NewAdmitter(10_000, 2)
 
 	r1, _ := a.Acquire(context.Background(), 1<<20)
 	r2, _ := a.Acquire(context.Background(), 1<<20)
@@ -55,8 +55,6 @@ func TestExecutionSlotsBoundConcurrency(t *testing.T) {
 	}
 }
 
-// An execution larger than the whole budget can never be admitted. It must fail
-// immediately instead of blocking forever.
 func TestOversizedExecutionIsRejectedNotDeadlocked(t *testing.T) {
 	a := NewAdmitter(256, 2)
 
@@ -113,8 +111,6 @@ func TestAdmissionIsRaceFree(t *testing.T) {
 		t.Errorf("%d MB leaked after all executions finished", got)
 	}
 }
-
-// --- scheduler ---
 
 type fakeRunner struct {
 	started  atomic.Int64
@@ -191,7 +187,7 @@ func TestDrainWaitsForRunningWorkAndRefusesNew(t *testing.T) {
 		finished <- err
 	}()
 
-	// Wait for it to actually be running before draining.
+	// Wait until it is running before draining.
 	for s.Active() == 0 {
 		time.Sleep(time.Millisecond)
 	}
@@ -240,23 +236,6 @@ func TestDrainTimesOutRatherThanHanging(t *testing.T) {
 	}
 }
 
-func TestTrySubmitRefusesInsteadOfQueuing(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	r := &fakeRunner{block: block}
-	s := NewScheduler(r, 1, 0)
-
-	go s.TrySubmit(context.Background(), testSubmission("first"))
-	for s.Active() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-
-	if _, err := s.TrySubmit(context.Background(), testSubmission("second")); !errors.Is(err, ErrOverloaded) {
-		t.Errorf("got %v, want ErrOverloaded", err)
-	}
-}
-
-// A large submission must not stop small ones from being served.
 func TestSmallSubmissionsAreNotStarvedByALargeOne(t *testing.T) {
 	r := &fakeRunner{delay: 10 * time.Millisecond}
 	s := NewScheduler(r, 2, 0)
@@ -283,9 +262,6 @@ func TestSmallSubmissionsAreNotStarvedByALargeOne(t *testing.T) {
 	<-big
 }
 
-// Under sustained overload citron must refuse work rather than queue it forever.
-// Without this, every client waits out its own timeout having been told nothing —
-// which looks identical to citron being down.
 func TestQueueWaitShedsLoadInsteadOfHangingClients(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
@@ -309,8 +285,7 @@ func TestQueueWaitShedsLoadInsteadOfHangingClients(t *testing.T) {
 	}
 }
 
-// A caller that gives up first should see its own cancellation, not a misleading
-// "overloaded" that blames citron.
+// A caller's own cancellation must surface as ctx.Err(), not ErrOverloaded.
 func TestClientCancellationIsNotReportedAsOverload(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)

@@ -1,0 +1,39 @@
+services:
+  citron:
+    image: citron:latest
+    command: ["citron", "-config", "/opt/citron/configs/swarm.conf", "-address", "0.0.0.0:2358"]
+    cap_add: [SYS_ADMIN]
+    configs:
+      - source: citron
+        target: /opt/citron/configs/swarm.conf
+    volumes:
+      - type: tmpfs
+        target: /box
+        tmpfs: {size: 2147483648}
+    stop_grace_period: 30s
+    networks: [citron]
+    deploy:
+      replicas: 3
+      # One DNS record per replica, so HAProxy balances across them itself.
+      endpoint_mode: dnsrr
+      resources:
+        limits: {cpus: "2", memory: 3G}
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    ports:
+      - "2358:2358"
+    configs:
+      - source: haproxy
+        target: /usr/local/etc/haproxy/haproxy.cfg
+    networks: [citron]
+
+configs:
+  citron:
+    file: ./citron.conf
+  haproxy:
+    file: ../scaling/haproxy.cfg
+
+networks:
+  citron:
+    driver: overlay

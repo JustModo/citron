@@ -33,17 +33,6 @@ func TestTrimTrailing(t *testing.T) {
 	}
 }
 
-func TestExactIsStricter(t *testing.T) {
-	if (Exact{}).Equal([]byte("5"), []byte("5\n")) {
-		t.Error("Exact should not ignore a trailing newline")
-	}
-	if !(Exact{}).Equal([]byte("5\n"), []byte("5\n")) {
-		t.Error("Exact should match identical bytes")
-	}
-}
-
-// Comparison must not mutate what it is given; results are reported to the client
-// after the verdict is decided.
 func TestInputsAreNotMutated(t *testing.T) {
 	expected := []byte("value\n\n")
 	actual := []byte("value  ")
@@ -55,6 +44,6 @@ func TestInputsAreNotMutated(t *testing.T) {
 
 func TestDefaultIsTrimTrailing(t *testing.T) {
 	if Default().Name() != (TrimTrailing{}).Name() {
-		t.Errorf("default comparator is %q; the consumer relies on trailing-whitespace tolerance", Default().Name())
+		t.Errorf("default comparator is %q, want trim-trailing", Default().Name())
 	}
 }

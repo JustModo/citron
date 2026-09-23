@@ -1,0 +1,17 @@
+# Started by: node bench/stress.js --profile high
+services:
+  citron:
+    extends:
+      file: ../../compose.yaml
+      service: citron
+    command: ["citron", "-config", "/opt/citron/configs/stress.conf", "-address", "0.0.0.0:2358"]
+    volumes:
+      - ../configs/citron-high.conf:/opt/citron/configs/stress.conf:ro
+    tmpfs: !override
+      - /box:size=8g,mode=1777,exec
+    cpus: !reset null
+    mem_limit: 16g
+    healthcheck:
+      test: ["CMD", "citron", "-config", "/opt/citron/configs/stress.conf", "-languages"]
+networks:
+  citron:

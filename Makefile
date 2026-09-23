@@ -1,12 +1,7 @@
 BIN   := bin/citron
 IMAGE := citron:dev
 
-SANDBOX_FLAGS := --cap-add=SYS_ADMIN \
-	--security-opt apparmor=unconfined \
-	--security-opt systempaths=unconfined \
-	--cgroupns=private
-
-.PHONY: build test test-race lint integration security image spike up down clean smoke
+.PHONY: build test test-race lint security image up down clean smoke stress
 
 build:
 	go build -o $(BIN) ./cmd/citron
@@ -21,17 +16,11 @@ lint:
 	go vet ./...
 	gofmt -l -e .
 
-integration:
-	go test -tags=integration -count=1 ./...
-
 security:
-	go test -tags=security -count=1 -timeout=15m ./tests/security/...
+	go test -tags=security -count=1 -timeout=15m ./tests/
 
 image:
 	docker build -t $(IMAGE) .
-
-spike: image
-	docker run --rm $(SANDBOX_FLAGS) --network=none $(IMAGE) /opt/citron/spike.sh
 
 up:
 	docker compose up -d --build
@@ -40,7 +29,10 @@ down:
 	docker compose down
 
 smoke:
-	node tests/smoke/smoke.mjs
+	node tests/smoke.mjs
+
+stress:
+	node bench/stress.js
 
 clean:
-	rm -rf bin dist
+	rm -rf bin

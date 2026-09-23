@@ -17,21 +17,17 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// Local runs commands directly on the host with rlimits, a private process group and
-// bounded output.
-//
-// It does NOT isolate anything: no namespaces, no filesystem restriction, no network
-// restriction. It exists so citron runs on a developer machine without nsjail, and
-// so the Sandbox contract is exercised by tests that need no privileges. The
-// composition root refuses to select it unless the operator has explicitly opted in.
+// Local runs commands on the host with rlimits, a private process group and bounded
+// output. It provides no isolation (no namespaces, filesystem or network
+// restriction) and is intended for development and unprivileged tests only.
 type Local struct {
 	log *slog.Logger
-	// prlimit is the path to util-linux prlimit, or "" when unavailable. Go cannot
-	// set rlimits on a child directly, so the limits are applied by exec'ing through
-	// prlimit when it is present.
+	// prlimit is the path to prlimit(1), or "" if absent. Go cannot set rlimits on
+	// a child directly, so limits are applied by exec'ing through it.
 	prlimit string
 }
 
+// NewLocal returns a Local driver, warning if prlimit is unavailable.
 func NewLocal(log *slog.Logger) *Local {
 	l := &Local{log: log}
 	if p, err := exec.LookPath("prlimit"); err == nil {
@@ -43,14 +39,16 @@ func NewLocal(log *slog.Logger) *Local {
 	return l
 }
 
+// Name returns "local".
 func (*Local) Name() string { return "local" }
 
+// Run executes spec on the host and reports what happened.
 func (l *Local) Run(ctx context.Context, spec Spec) (Result, error) {
 	if len(spec.Argv) == 0 {
 		return Result{}, errors.New("sandbox: empty argv")
 	}
-	// Resolve before wrapping in prlimit. Otherwise a missing toolchain surfaces as
-	// the wrapper's exit 127, which reads as a runtime error in the submitted code.
+	// Resolve before wrapping in prlimit, or a missing binary becomes the wrapper's
+	// exit 127 and looks like a runtime error in the submission.
 	if err := resolveCommand(spec.Dir, spec.Argv[0]); err != nil {
 		return Result{}, err
 	}
@@ -71,20 +69,18 @@ func (l *Local) Run(ctx context.Context, spec Spec) (Result, error) {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	// A private process group is what makes the kill below reach grandchildren; a
-	// program that forks and exits would otherwise leave its children running.
+	// A private process group lets the kill reach grandchildren.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
-	// Even after SIGKILL, a child that inherited the pipes keeps them open. Without
-	// this, Wait blocks on the copier forever.
+	// Descendants that inherited the pipes keep them open after SIGKILL; without a
+	// WaitDelay, Wait blocks on the copier forever.
 	cmd.WaitDelay = 2 * time.Second
 
 	start := time.Now()
 	err := cmd.Run()
 	wall := time.Since(start)
 
-	// Belt and braces: kill the group again in case the process exited normally but
-	// left descendants holding the workspace open.
+	// A normal exit can still leave descendants running.
 	if cmd.Process != nil {
 		_ = killGroup(cmd.Process.Pid)
 	}
@@ -102,28 +98,22 @@ func (l *Local) Run(ctx context.Context, spec Spec) (Result, error) {
 	switch {
 	case err == nil:
 	case errors.As(err, new(*exec.ExitError)):
-		// A non-zero exit is a result, not a failure of the sandbox.
+		// A non-zero exit is a result, not a sandbox failure.
 	case errors.Is(err, exec.ErrWaitDelay):
-		// The process is gone but a descendant still held the pipes open. Expected
-		// whenever a fork bomb or a backgrounding program is killed.
+		// A killed descendant still held the pipes; expected for fork bombs.
 	default:
 		return Result{}, fmt.Errorf("sandbox: starting %q: %w", argv[0], err)
 	}
 
+	res.ExitCode, res.Signal = exitStatus(cmd.ProcessState)
 	if st := cmd.ProcessState; st != nil {
-		res.ExitCode = st.ExitCode()
-		if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			res.Signal = int(ws.Signal())
-			res.ExitCode = 128 + res.Signal
-		}
 		if ru, ok := st.SysUsage().(*syscall.Rusage); ok {
 			res.CPUTime = time.Duration(ru.Utime.Nano()) + time.Duration(ru.Stime.Nano())
 			res.Memory = judge.MemoryBytes(ru.Maxrss) << 10 // Linux reports KiB
 		}
 	}
 
-	// Cause tells a wall-clock kill apart from an output-bomb kill; both arrive as a
-	// cancelled context and a SIGKILLed process.
+	// An output-limit kill also cancels ctx, so it must not count as a timeout.
 	if ctx.Err() != nil && !res.OutputExceeded {
 		res.TimedOut = true
 	}
@@ -145,22 +135,16 @@ func (l *Local) withLimits(lim judge.Limits, argv []string) []string {
 		"--cpu=" + strconv.FormatInt(cpu, 10),
 		"--fsize=" + strconv.FormatInt(lim.MaxFileSize, 10),
 		"--stack=" + strconv.FormatInt(int64(lim.Stack), 10),
-		// Deliberately absent:
-		//   --nproc: RLIMIT_NPROC counts every process owned by the uid on the whole
-		//     machine, not the ones in this execution. On a shared uid it makes
-		//     unrelated forks fail, including the compiler's. Process count is
-		//     bounded by the cgroup's pids.max in the real sandbox.
-		//   --as: the JVM reserves ~1 GB of address space regardless of heap size,
-		//     so an address-space cap kills it at startup. Memory is bounded by the
-		//     cgroup's memory.max in the real sandbox.
+		// Omitted: --nproc, because RLIMIT_NPROC counts every process of the uid
+		// machine-wide and breaks unrelated forks; --as, because the JVM reserves
+		// ~1 GB of address space at startup. nsjail uses the cgroup for both.
 		"--",
 	}
 	return append(out, argv...)
 }
 
-// resolveCommand reports whether argv[0] can actually be executed. A path is taken
-// relative to the workspace, matching the command's working directory; a bare name is
-// looked up on PATH.
+// resolveCommand checks that name is executable. A path is relative to dir, the
+// command's working directory; a bare name is looked up on PATH.
 func resolveCommand(dir, name string) error {
 	if !strings.ContainsRune(name, '/') {
 		if _, err := exec.LookPath(name); err != nil {
@@ -182,6 +166,7 @@ func resolveCommand(dir, name string) error {
 	return nil
 }
 
+// killGroup SIGKILLs the process group led by pid.
 func killGroup(pid int) error {
 	if pid <= 0 {
 		return nil

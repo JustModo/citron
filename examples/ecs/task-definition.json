@@ -1,0 +1,36 @@
+{
+  "family": "citron",
+  "requiresCompatibilities": ["EC2"],
+  "networkMode": "awsvpc",
+  "cpu": "2048",
+  "memory": "3072",
+  "containerDefinitions": [
+    {
+      "name": "citron",
+      "image": "<account>.dkr.ecr.<region>.amazonaws.com/citron:<tag>",
+      "essential": true,
+      "privileged": true,
+      "command": ["citron", "-config", "/opt/citron/configs/citron.conf", "-address", "0.0.0.0:2358"],
+      "portMappings": [{"containerPort": 2358, "protocol": "tcp"}],
+      "linuxParameters": {
+        "tmpfs": [{"containerPath": "/box", "size": 2048, "mountOptions": ["exec", "mode=1777"]}]
+      },
+      "healthCheck": {
+        "command": ["CMD", "citron", "-config", "/opt/citron/configs/citron.conf", "-languages"],
+        "interval": 30,
+        "timeout": 10,
+        "startPeriod": 10,
+        "retries": 3
+      },
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/citron",
+          "awslogs-region": "<region>",
+          "awslogs-stream-prefix": "citron"
+        }
+      }
+    }
+  ]
+}

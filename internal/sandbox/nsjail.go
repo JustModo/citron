@@ -12,17 +12,17 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// NsjailConfig describes the jail. The mount lists are configuration rather than
-// constants so that adding a language whose runtime needs another path is a config
-// change, matching how languages themselves are added.
+// NsjailConfig configures the jail. Mount lists are configurable so a language
+// whose runtime needs another path requires no code change.
 type NsjailConfig struct {
-	Path       string
+	// Path is the nsjail binary; defaults to "nsjail" on PATH.
+	Path string
+	// CgroupRoot is the delegated cgroup directory executions are created under.
 	CgroupRoot string
 
 	// ReadOnly paths are bind-mounted read-only into the jail.
@@ -30,9 +30,15 @@ type NsjailConfig struct {
 	// Symlinks are "target:link" pairs, needed on usrmerge distributions where
 	// /bin and /lib are symlinks that a bind mount would not reproduce.
 	Symlinks []string
-	// TmpfsMB sizes the writable /tmp. Bounding it matters: nothing else stops a
-	// submission writing files until the host's disk is full.
+	// TmpfsMB sizes the writable /tmp (default 64); it is the only bound on files
+	// a submission can write there.
 	TmpfsMB int64
+	// NoUserNamespace keeps the jail in the container's user namespace. The kernel
+	// refuses a fresh /proc in a new user namespace while the container's /proc has
+	// masked paths, which some platforms (e.g. Docker Swarm) cannot unmask. The
+	// submission still runs as an unprivileged uid without capabilities, and
+	// no_new_privs makes setuid binaries inert.
+	NoUserNamespace bool
 }
 
 // Nsjail runs each execution in its own namespaces and its own cgroup.
@@ -43,6 +49,8 @@ type Nsjail struct {
 	seq     atomic.Uint64
 }
 
+// NewNsjail locates nsjail, selects a cgroup backend and runs a self-test, so
+// misconfiguration fails at startup.
 func NewNsjail(cfg NsjailConfig, log *slog.Logger) (*Nsjail, error) {
 	if cfg.Path == "" {
 		cfg.Path = "nsjail"
@@ -65,11 +73,8 @@ func NewNsjail(cfg NsjailConfig, log *slog.Logger) (*Nsjail, error) {
 	return n, nil
 }
 
-// selfTest runs a trivial command through a real jail at startup.
-//
-// Without it, a mistyped flag or a missing mount path shows up as every submission
-// mysteriously failing to compile. Configuration problems belong at boot, where they
-// are one loud error instead of thousands of confusing verdicts.
+// selfTest runs a trivial command through a real jail, so a bad flag or missing
+// mount fails at startup instead of as failed submissions.
 func (n *Nsjail) selfTest() error {
 	dir, err := os.MkdirTemp("", "citron-selftest-")
 	if err != nil {
@@ -85,8 +90,7 @@ func (n *Nsjail) selfTest() error {
 
 	res, err := n.Run(ctx, Spec{
 		Dir: dir,
-		// A bare name on purpose: this is how language manifests spell their
-		// commands, so the self-test must exercise the same resolution they do.
+		// A bare name, as language manifests use, to exercise PATH resolution.
 		Argv: []string{"echo", "citron-selftest"},
 		Env:  []string{"PATH=/usr/local/bin:/usr/bin:/bin"},
 		Limits: judge.Limits{
@@ -105,10 +109,13 @@ func (n *Nsjail) selfTest() error {
 	return nil
 }
 
+// Name returns "nsjail".
 func (*Nsjail) Name() string { return "nsjail" }
 
+// jailWorkspace is where spec.Dir is mounted inside the jail.
 const jailWorkspace = "/box"
 
+// Run executes spec inside a fresh jail and cgroup and reports what happened.
 func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 	if len(spec.Argv) == 0 {
 		return Result{}, errors.New("sandbox: empty argv")
@@ -131,8 +138,7 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 		return Result{}, err
 	}
 
-	// nsjail logs to stderr by default, which would mix jail diagnostics into the
-	// submitted program's own stderr. Give it a private fd instead.
+	// Give nsjail a private log fd so its diagnostics stay out of the program's stderr.
 	logRead, logWrite, err := os.Pipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("sandbox: %w", err)
@@ -154,10 +160,11 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 		jailLog <- b
 	}()
 
-	// On v2 the kernel places the process at clone time, leaving no unaccounted window.
+	// On v2 the child is placed at clone time; on v1 runJail places it after Start.
 	cg.Prepare(cmd)
 	// Killing the cgroup rather than the process takes every descendant with it.
 	cmd.Cancel = cg.Kill
+	// Bounds Wait when descendants still hold the inherited output pipes.
 	cmd.WaitDelay = 2 * time.Second
 
 	start := time.Now()
@@ -168,7 +175,7 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 	_ = logWrite.Close()
 	jailDiagnostics := <-jailLog
 
-	// Whatever happened, nothing from this execution may still be running.
+	// Ensure nothing from this execution survives, however it ended.
 	_ = cg.Kill()
 
 	res := Result{
@@ -194,28 +201,20 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 			runErr, bytes.TrimSpace(jailDiagnostics))
 	}
 
-	// A jail that never started the program is citron's failure, not the
-	// submission's. Reporting it as a compile or runtime error would send a student
-	// chasing a bug in their own code.
+	// A jail that never launched the program is an infrastructure error, not a
+	// compile or runtime error in the submission.
 	if bytes.Contains(jailDiagnostics, []byte("Launching child process failed")) ||
 		bytes.Contains(jailDiagnostics, []byte("Couldn't launch the child process")) {
 		return Result{}, fmt.Errorf("sandbox: jail failed to start the process: %s",
 			bytes.TrimSpace(jailDiagnostics))
 	}
-	// nsjail warns on every run about running unprivileged and about no_pivotroot.
-	// Both are expected and documented, so this is debug detail rather than a
-	// warning that would drown the log at one line per testcase.
+	// nsjail warns on every run about running unprivileged and no_pivotroot; both
+	// are expected, so log at debug rather than once per testcase at warn.
 	if len(jailDiagnostics) > 0 {
 		n.log.Debug("nsjail diagnostics", "output", string(bytes.TrimSpace(jailDiagnostics)))
 	}
 
-	if st := cmd.ProcessState; st != nil {
-		res.ExitCode = st.ExitCode()
-		if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			res.Signal = int(ws.Signal())
-			res.ExitCode = 128 + res.Signal
-		}
-	}
+	res.ExitCode, res.Signal = exitStatus(cmd.ProcessState)
 	// nsjail reports the jailed process's death by signal as 128+signal rather than
 	// dying itself, so recover the signal from the exit code.
 	if res.Signal == 0 && res.ExitCode > 128 && res.ExitCode < 165 {
@@ -237,12 +236,12 @@ func (n *Nsjail) Run(ctx context.Context, spec Spec) (Result, error) {
 	return res, nil
 }
 
-// runJail starts the jail, ensures it is inside the cgroup, and waits for it.
+// runJail starts the jail, places it in the cgroup and waits for it.
 func runJail(cmd *exec.Cmd, cg cgroup) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// A failed placement leaves the execution unlimited; it must not run on.
+	// An unplaced process would run without limits.
 	if err := cg.Place(cmd.Process.Pid); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -251,10 +250,10 @@ func runJail(cmd *exec.Cmd, cg cgroup) error {
 	return cmd.Wait()
 }
 
+// args builds the nsjail command line for spec.
 func (n *Nsjail) args(spec Spec) ([]string, error) {
-	// nsjail execve's argv[0] as given; it performs no PATH lookup. A bare command
-	// name has to be resolved here. The jail mounts the same /usr the worker has, so
-	// a path resolved out here is valid in there.
+	// nsjail does no PATH lookup. The jail mounts the host's /usr, so a path
+	// resolved here is valid inside.
 	argv := append([]string(nil), spec.Argv...)
 	if !strings.ContainsRune(argv[0], '/') {
 		path, err := exec.LookPath(argv[0])
@@ -268,23 +267,19 @@ func (n *Nsjail) args(spec Spec) ([]string, error) {
 	args := []string{
 		"--mode", "o",
 		"--quiet",
-		// Jail diagnostics go to their own descriptor so they never contaminate the
-		// submitted program's stderr.
-		"--log_fd", "3",
-		// An unprivileged uid inside the jail's own user namespace.
+		"--log_fd", "3", // the private log pipe from Run
+		// nobody:nogroup.
 		"--user", "65534",
 		"--group", "65534",
-		// No network of any kind: no internet, no DNS, no localhost, no metadata
-		// service, no reaching citron's own API or queue.
+		// No network interfaces at all, not even loopback.
 		"--iface_no_lo",
-		// The cgroup is created and owned by citron, not by nsjail.
+		// citron creates and owns the cgroup.
 		"--disable_clone_newcgroup",
 		// pivot_root is not permitted inside a container; nsjail falls back to
-		// MS_MOVE and chroot. See docs/sandbox.md.
+		// MS_MOVE and chroot.
 		"--no_pivotroot",
-		// Deliberately not set: RLIMIT_AS. The JVM reserves roughly a gigabyte of
-		// address space whatever its heap size, so capping address space kills it
-		// at startup. Memory is bounded by the cgroup, which counts touched pages.
+		// No RLIMIT_AS: the JVM reserves ~1 GB of address space regardless of heap
+		// size. Memory is bounded by the cgroup, which counts touched pages.
 		"--rlimit_as", "max",
 		"--rlimit_fsize", strconv.FormatInt(max(lim.MaxFileSize>>20, 1), 10),
 		"--rlimit_stack", strconv.FormatInt(max(int64(lim.Stack)>>20, 1), 10),
@@ -292,16 +287,14 @@ func (n *Nsjail) args(spec Spec) ([]string, error) {
 		"--time_limit", strconv.Itoa(int(lim.Deadline().Seconds()) + 1),
 		"--cwd", jailWorkspace,
 		"--bindmount", spec.Dir + ":" + jailWorkspace,
-		// A sized tmpfs, not a plain --tmpfsmount: without a size cap a submission
-		// can write files until the host's disk is full, which takes down far more
-		// than the submission.
+		// A sized tmpfs rather than --tmpfsmount, so /tmp writes stay bounded.
 		"--mount", "none:/tmp:tmpfs:size=" + strconv.FormatInt(n.cfg.TmpfsMB<<20, 10),
 	}
 
-	for _, p := range n.cfg.ReadOnly {
-		args = append(args, "--bindmount_ro", p)
+	if n.cfg.NoUserNamespace {
+		args = append(args, "--disable_clone_newuser")
 	}
-	for _, p := range spec.ReadOnly {
+	for _, p := range n.cfg.ReadOnly {
 		args = append(args, "--bindmount_ro", p)
 	}
 	for _, s := range n.cfg.Symlinks {

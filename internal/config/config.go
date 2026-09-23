@@ -1,5 +1,3 @@
-// Package config loads citron.conf into an immutable, validated struct. Nothing
-// reads configuration after startup; everything is injected from the composition root.
 package config
 
 import (
@@ -14,29 +12,29 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// Durations are seconds in the file (matching DESIGN.md) and converted here, so the
-// config surface stays plain data and unit conversion happens exactly once.
+// Config is the whole citron.conf. Durations are stored as seconds and converted by
+// its accessor methods.
 type Config struct {
 	Server    Server    `toml:"server"`
 	Sandbox   Sandbox   `toml:"sandbox"`
 	Limits    Limits    `toml:"limits"`
 	Scheduler Scheduler `toml:"scheduler"`
-	Jobs      Jobs      `toml:"jobs"`
-	Queue     Queue     `toml:"queue"`
 	Languages Languages `toml:"languages"`
 	Log       Log       `toml:"log"`
 }
 
+// Server configures the HTTP listener.
 type Server struct {
 	Address         string  `toml:"address"`
 	ReadTimeoutSec  float64 `toml:"read_timeout_seconds"`
 	WriteTimeoutSec float64 `toml:"write_timeout_seconds"`
 	ShutdownSec     float64 `toml:"shutdown_grace_seconds"`
 	// AuthToken, when set, is required in the X-Judge-Token header. Empty disables
-	// the check; the service must then be reachable only on a private network.
+	// the check, so the service must then be reachable only on a private network.
 	AuthToken string `toml:"auth_token"`
 }
 
+// Sandbox configures the execution driver and the filesystem it exposes.
 type Sandbox struct {
 	// Driver is "nsjail" (production) or "local" (development, NOT isolated).
 	Driver           string `toml:"driver"`
@@ -47,20 +45,23 @@ type Sandbox struct {
 	CacheRoot        string `toml:"cache_root"`
 	CacheEntries     int    `toml:"cache_entries"`
 
-	// ReadOnly and Symlinks build the filesystem a submission sees. They are
-	// configuration so that a language needing another path is a config change
-	// rather than a rebuild.
+	// ReadOnly and Symlinks ("target:link") build the filesystem a submission sees.
 	ReadOnly []string `toml:"readonly_paths"`
 	Symlinks []string `toml:"symlinks"`
 	TmpfsMB  int64    `toml:"tmpfs_mb"`
+	// UserNamespace gives each jail its own user namespace. Disable only where the
+	// platform cannot unmask /proc (e.g. Docker Swarm).
+	UserNamespace bool `toml:"user_namespace"`
 }
 
+// Limits groups the execution, compile and submission limits.
 type Limits struct {
 	Execution  ExecutionLimits  `toml:"execution"`
 	Compile    CompileLimits    `toml:"compile"`
 	Submission SubmissionLimits `toml:"submission"`
 }
 
+// ExecutionLimits are the default per-testcase limits.
 type ExecutionLimits struct {
 	CPUTimeSec      float64 `toml:"cpu_time_seconds"`
 	CPUExtraTimeSec float64 `toml:"cpu_extra_time_seconds"`
@@ -73,6 +74,7 @@ type ExecutionLimits struct {
 	StderrMB        int64   `toml:"stderr_mb"`
 }
 
+// CompileLimits bound the compile step.
 type CompileLimits struct {
 	WallTimeSec  float64 `toml:"wall_time_seconds"`
 	CPUTimeSec   float64 `toml:"cpu_time_seconds"`
@@ -82,6 +84,7 @@ type CompileLimits struct {
 	OutputKB     int64   `toml:"output_kb"`
 }
 
+// SubmissionLimits bound a whole submission.
 type SubmissionLimits struct {
 	MaxTestcases         int     `toml:"max_testcases"`
 	MaxSourceMB          int64   `toml:"max_source_mb"`
@@ -91,34 +94,25 @@ type SubmissionLimits struct {
 	MaxTotalWallTimeSec  float64 `toml:"max_total_wall_time_seconds"`
 }
 
+// Scheduler configures admission and concurrency.
 type Scheduler struct {
 	MaxConcurrentSubmissions int `toml:"max_concurrent_submissions"`
-	// MaxQueueWaitSec bounds how long a submission waits for a slot. Past it the
-	// Citron refuses with 503 instead of holding the connection until the client
-	// times out having been told nothing.
+	// MaxQueueWaitSec bounds how long a submission waits for a slot before it is
+	// refused with 503.
 	MaxQueueWaitSec float64 `toml:"max_queue_wait_seconds"`
 	ExecutionSlots  int     `toml:"execution_slots"`
 	MemoryBudgetMB  int64   `toml:"memory_budget_mb"`
 }
 
-type Jobs struct {
-	MaxAttempts int `toml:"max_attempts"`
-}
-
-type Queue struct {
-	Driver   string `toml:"driver"` // "inproc" | "redis"
-	RedisURL string `toml:"redis_url"`
-	Stream   string `toml:"stream"`
-	Group    string `toml:"group"`
-}
-
+// Languages locates the language manifests.
 type Languages struct {
 	Path string `toml:"path"`
-	// RequireToolchains fails startup when a configured language's compiler or
-	// runtime is missing, rather than accepting submissions that cannot run.
+	// RequireToolchains fails startup when a configured language's toolchain is
+	// missing.
 	RequireToolchains bool `toml:"require_toolchains"`
 }
 
+// Log configures logging.
 type Log struct {
 	Level  string `toml:"level"`
 	Format string `toml:"format"` // "json" | "text"
@@ -126,7 +120,7 @@ type Log struct {
 
 func secs(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
 
-// ExecutionLimits converts the configured defaults into domain limits.
+// ExecutionLimits returns the default per-testcase limits.
 func (c Config) ExecutionLimits() judge.Limits {
 	e := c.Limits.Execution
 	return judge.Limits{
@@ -142,6 +136,7 @@ func (c Config) ExecutionLimits() judge.Limits {
 	}
 }
 
+// CompileLimits returns the compile-step limits. Stack is shared with execution.
 func (c Config) CompileLimits() judge.Limits {
 	k := c.Limits.Compile
 	return judge.Limits{
@@ -156,12 +151,15 @@ func (c Config) CompileLimits() judge.Limits {
 	}
 }
 
+// SubmissionDeadline returns the wall-clock budget for a whole submission.
 func (c Config) SubmissionDeadline() time.Duration {
 	return secs(c.Limits.Submission.MaxTotalWallTimeSec)
 }
 
+// ShutdownGrace returns how long shutdown waits for in-flight requests.
 func (c Config) ShutdownGrace() time.Duration { return secs(c.Server.ShutdownSec) }
 
+// QueueWait returns the maximum time a submission waits for admission.
 func (c Config) QueueWait() time.Duration { return secs(c.Scheduler.MaxQueueWaitSec) }
 
 // Default returns a configuration sized for the 2 vCPU / 8 GB baseline.
@@ -183,6 +181,7 @@ func Default() Config {
 			ReadOnly:      []string{"/usr", "/etc/alternatives", "/etc/java-21-openjdk"},
 			Symlinks:      []string{"/usr/bin:/bin", "/usr/lib:/lib", "/usr/lib64:/lib64", "/usr/sbin:/sbin"},
 			TmpfsMB:       64,
+			UserNamespace: true,
 		},
 		Limits: Limits{
 			Execution: ExecutionLimits{
@@ -198,7 +197,7 @@ func Default() Config {
 				MaxTestcases: 1000, MaxSourceMB: 1,
 				MaxTotalInputMB: 32, MaxTotalOutputMB: 32,
 				MaxParallelTestcases: 4,
-				// Below the 45s client abort so an overloaded citron still answers.
+				// Below the client's 45 s timeout.
 				MaxTotalWallTimeSec: 30,
 			},
 		},
@@ -208,15 +207,13 @@ func Default() Config {
 			ExecutionSlots:           2,
 			MemoryBudgetMB:           1024,
 		},
-		Jobs:      Jobs{MaxAttempts: 2},
-		Queue:     Queue{Driver: "inproc", Stream: "citron:submissions", Group: "citron"},
 		Languages: Languages{Path: "configs/languages.toml", RequireToolchains: true},
 		Log:       Log{Level: "info", Format: "json"},
 	}
 }
 
-// Load reads path over the defaults. A missing file is an error: running on implicit
-// defaults in production is how limits silently stop being enforced.
+// Load reads path over Default and validates the result. A missing file is an
+// error so limits are never taken implicitly from defaults.
 func Load(path string) (Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
@@ -240,8 +237,10 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// ErrInvalid is wrapped by configuration errors other than invalid limits.
 var ErrInvalid = errors.New("invalid configuration")
 
+// Validate reports the first invalid or inconsistent setting.
 func (c Config) Validate() error {
 	if err := c.ExecutionLimits().Validate(); err != nil {
 		return fmt.Errorf("limits.execution: %w", err)
@@ -260,25 +259,20 @@ func (c Config) Validate() error {
 		{c.Sandbox.Driver != "local" || c.Sandbox.AllowUnsafeLocal,
 			`sandbox.driver = "local" does not isolate untrusted code; set sandbox.allow_unsafe_local = true to accept that`},
 		{c.Sandbox.WorkspaceRoot != "", "sandbox.workspace_root is required"},
-		{c.Queue.Driver == "inproc" || c.Queue.Driver == "redis",
-			`queue.driver must be "inproc" or "redis"`},
-		{c.Queue.Driver != "redis" || c.Queue.RedisURL != "",
-			`queue.redis_url is required when queue.driver = "redis"`},
 		{c.Limits.Submission.MaxTestcases > 0, "limits.submission.max_testcases must be > 0"},
 		{c.Limits.Submission.MaxParallelTestcases > 0, "limits.submission.max_parallel_testcases must be > 0"},
 		{c.Limits.Submission.MaxTotalWallTimeSec > 0, "limits.submission.max_total_wall_time_seconds must be > 0"},
 		{c.Scheduler.MaxConcurrentSubmissions > 0, "scheduler.max_concurrent_submissions must be > 0"},
 		{c.Scheduler.ExecutionSlots > 0, "scheduler.execution_slots must be > 0"},
 		{c.Scheduler.MaxQueueWaitSec > 0, "scheduler.max_queue_wait_seconds must be > 0"},
-		// Queue wait plus execution must still fit inside the client's patience.
+		// Queue wait counts against the submission deadline.
 		{c.Scheduler.MaxQueueWaitSec < c.Limits.Submission.MaxTotalWallTimeSec,
 			"scheduler.max_queue_wait_seconds must be < limits.submission.max_total_wall_time_seconds"},
-		{c.Jobs.MaxAttempts > 0, "jobs.max_attempts must be > 0"},
 		{c.Languages.Path != "", "languages.path is required"},
 		// A submission that cannot fit in the budget would block forever at admission.
 		{c.Scheduler.MemoryBudgetMB >= c.Limits.Execution.MemoryMB,
 			"scheduler.memory_budget_mb must be >= limits.execution.memory_mb"},
-		// Citron must answer before the client gives up.
+		// The response must be written before the server's write timeout.
 		{c.Limits.Submission.MaxTotalWallTimeSec <= c.Server.WriteTimeoutSec,
 			"limits.submission.max_total_wall_time_seconds must be <= server.write_timeout_seconds"},
 	}

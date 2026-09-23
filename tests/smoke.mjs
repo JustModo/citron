@@ -1,14 +1,13 @@
 #!/usr/bin/env node
-// Cross-version smoke test: starts the container, drives the real API, and checks
-// that the cgroup-enforced behaviour is identical whether the host runs cgroup v1
-// or v2. Run it on both kinds of host and compare the two reports.
+// End-to-end smoke test. Starts the service, drives the real API and checks the
+// cgroup-enforced limits; run it on cgroup v1 and v2 hosts to compare.
 //
-//   node tests/smoke/smoke.mjs              start the container, test, tear down
-//   node tests/smoke/smoke.mjs --keep       leave it running afterwards
-//   node tests/smoke/smoke.mjs --no-up      test an instance that is already up
-//   node tests/smoke/smoke.mjs --url http://host:2358
+//   node tests/smoke.mjs              start the container, test, tear down
+//   node tests/smoke.mjs --keep       leave it running afterwards
+//   node tests/smoke.mjs --no-up      test an instance that is already up
+//   node tests/smoke.mjs --url http://host:2358
 //
-// Needs Node 18+ (built-in fetch) and nothing else.
+// Requires Node 18+.
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -35,24 +34,20 @@ const sh = async (cmd, args) => {
   }
 }
 
-// --- environment ------------------------------------------------------------
 
 async function describeEnvironment() {
   const hostFS = await sh('stat', ['-fc', '%T', '/sys/fs/cgroup'])
   const host = hostFS === 'cgroup2fs' ? 'v2' : hostFS ? 'v1 / hybrid' : 'unknown'
 
-  // The service logs which backend it resolved at startup. That line is the whole
-  // point of this script: it tells you which code path the checks below exercised.
+  // The startup log names the cgroup backend the checks below exercise.
   const logs = await sh('docker', ['compose', 'logs', '--no-color', 'citron'])
   const line = logs.split('\n').reverse().find((l) => l.includes('cgroup backend'))
-  // The log line is JSON ("version":"v2") under docker compose and logfmt
-  // (version=v2) when the binary is run directly, so accept either spelling.
+  // JSON ("version":"v2") under Compose, logfmt (version=v2) when run directly.
   const inContainer = line?.match(/version["':=\s]+([\w.]+)/)?.[1] ?? 'unknown'
 
   return { hostFS, host, inContainer, line: line?.trim() }
 }
 
-// --- api --------------------------------------------------------------------
 
 async function submit(body) {
   const res = await fetch(`${BASE}/submissions`, {
@@ -88,9 +83,7 @@ async function waitForReady(timeoutMs = 180_000) {
   }
 }
 
-// --- checks -----------------------------------------------------------------
-// Each returns a detail string on success or throws. They are deliberately about
-// behaviour the cgroup enforces, not about Python.
+// Each check returns a detail string on success or throws.
 
 const checks = [
   {
@@ -164,8 +157,7 @@ const checks = [
         cpu_time_limit: 2,
         wall_time_limit: 8,
       })
-      // Any verdict is fine; what matters is that it terminated rather than taking
-      // the host with it, and that the service is still answering afterwards.
+      // Any verdict passes as long as it terminated and the service still answers.
       const ready = await fetch(`${BASE}/ready`)
       if (!ready.ok) throw new Error('service stopped being ready after a fork bomb')
       return `${r.status.description}, service still ready`
@@ -242,7 +234,6 @@ function expect(got, want, what) {
   if (got !== want) throw new Error(`${what} = ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
 }
 
-// --- main -------------------------------------------------------------------
 
 async function main() {
   if (START) {

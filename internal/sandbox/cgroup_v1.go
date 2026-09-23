@@ -14,6 +14,7 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
+// managerV1 creates cgroups across separate v1 controller hierarchies.
 type managerV1 struct {
 	dirs map[string]string
 }
@@ -37,6 +38,7 @@ func (m *managerV1) New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup
 			c.remove()
 			return nil, err
 		}
+		// memsw exists only with swap accounting; it keeps swap from bypassing the limit.
 		if err := c.write("memory", "memory.memsw.limit_in_bytes", limit); err != nil && !os.IsNotExist(err) {
 			c.remove()
 			return nil, err
@@ -66,13 +68,13 @@ func (c *cgroupV1) read(controller, file string) string {
 
 func (*cgroupV1) Prepare(*exec.Cmd) {}
 
-// Place moves the process, and every descendant it forks, into each controller.
-// v1 has no CLONE_INTO_CGROUP, so it joins just after start; the gap covers only
-// nsjail's own setup, before the submission is exec'd.
+// Place moves pid into every controller; later forks inherit membership.
+// v1 has no CLONE_INTO_CGROUP, so this runs after Start; the unaccounted gap
+// covers only nsjail's setup, before the submission is exec'd.
 func (c *cgroupV1) Place(pid int) error {
 	for controller := range c.dirs {
 		if err := c.write(controller, "cgroup.procs", strconv.Itoa(pid)); err != nil {
-			if errors.Is(err, syscall.ESRCH) {
+			if errors.Is(err, syscall.ESRCH) { // already exited
 				return nil
 			}
 			return err
@@ -104,9 +106,8 @@ func (c *cgroupV1) CPUTime() time.Duration {
 	return 0
 }
 
-// Kill terminates every process in the cgroup. v1 has no cgroup.kill, so it signals
-// the members it can see and repeats; pids.max bounds the tree, so this converges
-// and a child forked mid-round is caught by the next one.
+// Kill SIGKILLs every member. v1 has no cgroup.kill, so it repeats until the
+// cgroup is empty; pids.max bounds the tree and a mid-round fork is caught next round.
 func (c *cgroupV1) Kill() error {
 	dir, ok := c.dirs["pids"]
 	if !ok {

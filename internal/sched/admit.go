@@ -1,9 +1,3 @@
-// Package sched decides what is allowed to run and when.
-//
-// Two separate limits, because they run out for different reasons: memory, which the
-// machine physically has a fixed amount of, and execution slots, which stand in for
-// CPU. Reserving before starting is what keeps citron off the OOM killer — a
-// process the kernel chooses to kill is not necessarily the one that misbehaved.
 package sched
 
 import (
@@ -17,19 +11,22 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// ErrTooLarge means the execution could never be admitted, whatever the machine is
-// doing. Blocking on it would be a deadlock, so it fails immediately.
+// ErrTooLarge is returned immediately when a request exceeds the total memory
+// budget, since waiting for it would block forever.
 var ErrTooLarge = errors.New("execution exceeds the total memory budget")
 
+// Admitter reserves memory and execution slots from fixed budgets.
 type Admitter struct {
 	memory   *semaphore.Weighted
 	slots    *semaphore.Weighted
 	budgetMB int64
 
-	held     atomic.Int64 // MB currently reserved, for metrics
+	held     atomic.Int64 // MB currently reserved
 	inFlight atomic.Int64
 }
 
+// NewAdmitter returns an Admitter with budgetMB of memory and the given number of
+// slots; non-positive values are treated as 1.
 func NewAdmitter(budgetMB int64, slots int) *Admitter {
 	if slots <= 0 {
 		slots = 1
@@ -44,8 +41,8 @@ func NewAdmitter(budgetMB int64, slots int) *Admitter {
 	}
 }
 
-// Acquire reserves capacity for one execution and returns the function that gives it
-// back. The returned function is safe to call once; callers should defer it.
+// Acquire blocks until capacity for one execution is available and returns a release
+// function. Release is idempotent.
 func (a *Admitter) Acquire(ctx context.Context, mem judge.MemoryBytes) (func(), error) {
 	want := mem.MB()
 	if want <= 0 {
@@ -55,8 +52,8 @@ func (a *Admitter) Acquire(ctx context.Context, mem judge.MemoryBytes) (func(), 
 		return nil, fmt.Errorf("%w: needs %d MB, budget is %d MB", ErrTooLarge, want, a.budgetMB)
 	}
 
-	// Memory first: it is the scarcer resource, and holding a slot while waiting for
-	// memory would let a large execution block small ones that could have run.
+	// Memory first: holding a slot while waiting for memory would let a large
+	// execution block small ones that fit.
 	if err := a.memory.Acquire(ctx, want); err != nil {
 		return nil, err
 	}
@@ -80,11 +77,11 @@ func (a *Admitter) Acquire(ctx context.Context, mem judge.MemoryBytes) (func(), 
 	}, nil
 }
 
-// ReservedMB is how much of the budget is currently held.
+// ReservedMB returns the memory currently reserved, in MB.
 func (a *Admitter) ReservedMB() int64 { return a.held.Load() }
 
-// InFlight is how many executions are running.
+// InFlight returns the number of executions holding capacity.
 func (a *Admitter) InFlight() int64 { return a.inFlight.Load() }
 
-// BudgetMB is the total memory citron is allowed to commit.
+// BudgetMB returns the total memory budget, in MB.
 func (a *Admitter) BudgetMB() int64 { return a.budgetMB }

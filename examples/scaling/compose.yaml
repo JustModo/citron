@@ -1,0 +1,22 @@
+services:
+  citron:
+    extends:
+      file: ../../compose.yaml
+      service: citron
+    ports: !reset []
+    deploy:
+      replicas: 3
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2358:2358"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks: [citron]
+    depends_on: [citron]
+
+networks:
+  citron:
+    driver: bridge

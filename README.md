@@ -9,7 +9,7 @@ Languages: C, C++, Java, Python. Adding another is a block of configuration.
 
 ## API
 
-Submit a whole submission at once:
+Submit a source and all its testcases in one request:
 
 ```http
 POST /submissions
@@ -20,14 +20,8 @@ POST /submissions
 }
 ```
 
-A legacy single-testcase form is also accepted, for clients that send one request per
-testcase. It runs the same pipeline, and a content-addressed compile cache means such
-a client still compiles each submission only once.
-
-```http
-POST /submissions?base64_encoded=true&wait=true
-{"source_code": "<b64>", "language_id": 71, "stdin": "<b64>", "expected_output": "<b64>"}
-```
+Add `?base64_encoded=true` to send and receive base64 payloads. Identical sources are
+compiled once and served from a content-addressed compile cache.
 
 Also: `GET /languages`, `/health`, `/ready`, `/metrics`.
 
@@ -38,18 +32,17 @@ docker compose up
 ```
 
 The container needs `cap_add: SYS_ADMIN`, `apparmor=unconfined` and
-`systempaths=unconfined` so nsjail can build its namespaces. It never runs
-`privileged`, and no Docker socket is mounted. The reasoning is in
-[docs/sandbox.md](docs/sandbox.md).
+`systempaths=unconfined` for nsjail to create its namespaces. It does not need
+`privileged` or the Docker socket.
 
-For development on a machine without nsjail:
+For development without nsjail, set `sandbox.driver = "local"` and
+`sandbox.allow_unsafe_local = true`, then run `make build && ./bin/citron`. The local
+driver provides no isolation.
 
-```sh
-make build && ./bin/citron -config configs/citron.conf
-```
+## Scaling
 
-That requires `sandbox.driver = "local"` and `sandbox.allow_unsafe_local = true`. The
-local driver does not isolate anything; the service refuses to start otherwise.
+Replicas share no state; run more of them behind a least-connections load balancer.
+[examples/](examples/) covers Docker Compose, Swarm, Kubernetes and ECS.
 
 ## Adding a language
 
@@ -72,8 +65,8 @@ A language needing behaviour a template cannot express — Java must name its fi
 the public class — sets `hook` and implements it in its own package under
 [internal/lang/hooks/](internal/lang/hooks/).
 
-Every configured toolchain is probed at startup, and a missing one is a startup
-failure rather than a confusing verdict later.
+Toolchains are probed at startup. With `languages.require_toolchains` set, a missing
+one stops the service from starting.
 
 ## Security
 
@@ -81,8 +74,7 @@ This service executes untrusted code.
 
 - Bind it to an internal network. Never publish the port on a public interface.
   `server.auth_token` adds a shared-secret header.
-- Submissions get no network: no internet, no DNS, no loopback, no cloud metadata,
-  no route back to this service.
+- Submissions have no network access, including loopback.
 - Each testcase runs in a fresh writable workspace. Compiled artifacts are shared;
   mutable state never is.
 - CPU, wall clock, memory, process count, file size and output are all bounded.
@@ -94,7 +86,8 @@ This service executes untrusted code.
 ## Configuration
 
 [configs/citron.conf](configs/citron.conf) holds every operational setting: limits,
-concurrency, sandbox paths and logging. Nothing important is hardcoded.
+concurrency, sandbox paths and logging. Every key is optional and falls back to the
+value shown there, so a deployment's config only needs what it changes.
 
 ## Make targets
 
@@ -104,23 +97,27 @@ concurrency, sandbox paths and logging. Nothing important is hardcoded.
 | `test` / `test-race` | Unit tests |
 | `lint` | `go vet` and `gofmt` |
 | `up` / `down` | Start and stop with Compose |
-| `integration` | Tests requiring real toolchains |
 | `security` | Containment suite, against a running instance |
-| `spike` | Verify nsjail and cgroups work on this host |
+| `smoke` | Start the service and run the end-to-end smoke test |
+| `stress` | Load test; see `node bench/stress.js --help` |
 | `image` | Build the container image |
 
 ## Layout
 
 ```
-cmd/citron         composition root; dependencies are built and injected here
-internal/judge     domain model, standard library only
-internal/config    configuration loading and validation
-internal/lang      language registry and manifests
-internal/lang/hooks  per-language code, one package each
-internal/sandbox   sandbox interface, nsjail driver, cgroup control
-internal/run       compile-once pipeline and compile cache
-internal/sched     admission control and scheduling
-internal/compare   output comparison
-internal/api       HTTP handlers
-internal/metrics   Prometheus instrumentation
+cmd/citron            entry point; wires dependencies
+internal/judge        domain model, standard library only
+internal/config       configuration loading and validation
+internal/lang         language registry and manifests
+internal/lang/hooks   per-language code, one package each
+internal/sandbox      sandbox interface, nsjail driver, cgroup control
+internal/run          compile-once pipeline and compile cache
+internal/sched        admission control and scheduling
+internal/compare      output comparison
+internal/api          HTTP handlers
+internal/metrics      Prometheus instrumentation
+configs               service config and language definitions
+examples              API usage and deployment
+tests                 security and smoke suites, run against a live service
+bench                 load test harness and its deployment profiles
 ```

@@ -2,16 +2,17 @@ package judge
 
 import "time"
 
-// MemorySource records how a memory figure was obtained. The nsjail driver reads a
-// cgroup's peak (touched pages); the local dev driver reads rusage (per-process high
-// water mark). The two disagree, so results say which one produced the number.
+// MemorySource records how a memory figure was measured: cgroup peak (nsjail) or
+// per-process rusage high-water mark (local driver). The two are not comparable.
 type MemorySource string
 
+// Memory sources.
 const (
 	MemoryFromCgroup MemorySource = "cgroup"
 	MemoryFromRusage MemorySource = "rusage"
 )
 
+// TestCaseResult is the outcome of running one testcase.
 type TestCaseResult struct {
 	Index  TestCaseIndex
 	Status Status
@@ -29,20 +30,21 @@ type TestCaseResult struct {
 	Memory       MemoryBytes
 	MemorySource MemorySource
 
-	// Message explains a citron-level failure (sandbox error, limit hit). It never
-	// carries user program output.
+	// Message describes a citron-level failure; never program output.
 	Message string
 }
 
+// CompileResult is the outcome of compiling a submission.
 type CompileResult struct {
-	// Skipped is true for interpreted languages, which have no compile step.
+	// Skipped is true when the language has no compile step.
 	Skipped  bool
 	Success  bool
 	Output   []byte
 	Duration time.Duration
-	Cached   bool
+	Cached   bool // artifact reused from the compile cache
 }
 
+// SubmissionResult is the outcome of judging a whole submission.
 type SubmissionResult struct {
 	ID        SubmissionID
 	Status    Status
@@ -51,9 +53,8 @@ type SubmissionResult struct {
 	WallTime  time.Duration
 }
 
-// Aggregate derives the submission verdict from the testcase verdicts. A failed
-// compile short-circuits; otherwise the worst testcase wins. Every testcase runs
-// regardless (§29), so this only decides the headline.
+// Aggregate derives the submission verdict: CompilationError if compilation failed,
+// SystemError if there are no results, otherwise the most severe testcase verdict.
 func Aggregate(compile CompileResult, results []TestCaseResult) Status {
 	if !compile.Skipped && !compile.Success {
 		return StatusCompilationError

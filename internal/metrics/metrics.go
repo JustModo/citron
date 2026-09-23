@@ -1,8 +1,3 @@
-// Package metrics exposes what an operator would actually alert on.
-//
-// Deliberately not here: CPU and memory of citron's own process. node_exporter
-// and the container runtime already report those, and duplicating them invites two
-// sources of truth for the same number.
 package metrics
 
 import (
@@ -15,6 +10,7 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
+// Metrics holds citron's Prometheus collectors in a private registry.
 type Metrics struct {
 	registry *prometheus.Registry
 
@@ -35,8 +31,8 @@ type Metrics struct {
 	outputTruncated prometheus.Counter
 }
 
-// The judge_* metric names are kept stable across the rename to citron: they are an
-// external contract that existing dashboards and alerts are built on.
+// New creates and registers all collectors. The judge_* names are kept for
+// compatibility with existing dashboards and alerts.
 func New() *Metrics {
 	reg := prometheus.NewRegistry()
 	m := &Metrics{
@@ -102,6 +98,7 @@ func New() *Metrics {
 	return m
 }
 
+// Handler serves the registry in Prometheus exposition format.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 }
@@ -136,11 +133,7 @@ func (m *Metrics) ObserveSubmission(language string, res judge.SubmissionResult)
 	}
 }
 
-func (m *Metrics) SandboxFailure(reason string) {
-	m.sandboxFailures.WithLabelValues(reason).Inc()
-}
-
-// Capacity is the live state the gauges report.
+// Capacity is the live state reported by the gauges.
 type Capacity interface {
 	Active() int64
 	Queued() int64
@@ -149,8 +142,8 @@ type Capacity interface {
 	BudgetMB() int64
 }
 
-// Watch keeps the gauges current. Sampling rather than instrumenting every
-// acquire/release keeps the hot path free of metric calls.
+// Watch samples c into the gauges every interval until done is closed. Sampling
+// keeps metric calls off the acquire/release path.
 func (m *Metrics) Watch(done <-chan struct{}, c Capacity, every time.Duration) {
 	m.memoryBudget.Set(float64(c.BudgetMB() << 20))
 	ticker := time.NewTicker(every)

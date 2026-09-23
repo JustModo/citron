@@ -36,8 +36,7 @@ func TestAggregate(t *testing.T) {
 	}
 }
 
-// The consumer branches on substrings of the status description, not on ids alone.
-// Renaming these breaks it silently, so pin them here.
+// Clients match on these description substrings.
 func TestStatusDescriptionsConsumersDependOn(t *testing.T) {
 	if !strings.Contains(StatusCompilationError.String(), "Compilation") {
 		t.Errorf("compilation status must contain %q, got %q", "Compilation", StatusCompilationError)

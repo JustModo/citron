@@ -71,7 +71,7 @@ function parseArgs() {
  */
 function printHelp() {
   console.log(`
-Usage: node tests/stress/stress.js [options]
+Usage: node bench/stress.js [options]
 
 Options:
   --users <n>                     Virtual user concurrency (default: 100)
@@ -94,11 +94,7 @@ Options:
  * @returns {string}
  */
 function getComposeFilePath(profile) {
-  const profilePath = path.join(__dirname, 'profiles', `${profile}.yaml`);
-  if (fs.existsSync(profilePath)) return profilePath;
-  const altPath = path.join(__dirname, 'profiles', `compose.${profile}.yaml`);
-  if (fs.existsSync(altPath)) return altPath;
-  return path.join(__dirname, `compose.${profile}.yaml`);
+  return path.join(__dirname, 'profiles', `${profile}.yaml`);
 }
 
 /**

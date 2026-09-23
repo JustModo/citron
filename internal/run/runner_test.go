@@ -82,8 +82,6 @@ a, b = map(int, sys.stdin.read().split())
 print(a + b)
 `
 
-// The headline behaviour: every testcase runs and is reported, whatever the ones
-// before it did.
 func TestAllTestCasesRunDespiteFailures(t *testing.T) {
 	requireToolchain(t, "python3")
 
@@ -204,7 +202,6 @@ public class Main {
 	}
 }
 
-// One compile per submission, not one per testcase. This is the whole point.
 func TestCompilationHappensOncePerSubmission(t *testing.T) {
 	requireToolchain(t, "gcc")
 
@@ -225,10 +222,8 @@ int main(){int a,b;scanf("%d %d",&a,&b);printf("%d\n",a+b);return 0;}`
 	if res.Status != judge.StatusAccepted {
 		t.Fatalf("status = %v", res.Status)
 	}
-	// gcc takes ~100ms; eight compiles would dominate this.
 	t.Logf("8 testcases in %v (compile %v)", elapsed, res.Compile.Duration)
 
-	// Re-running the identical submission must hit the cache.
 	second, err := r.Run(context.Background(), submit("again", 50, source, cases...))
 	if err != nil {
 		t.Fatal(err)
@@ -238,8 +233,7 @@ int main(){int a,b;scanf("%d %d",&a,&b);printf("%d\n",a+b);return 0;}`
 	}
 }
 
-// The consumer that sends one request per testcase gets the same benefit, because
-// concurrent identical compiles collapse into one.
+// Concurrent identical compiles collapse into one via singleflight.
 func TestConcurrentIdenticalSubmissionsCompileOnce(t *testing.T) {
 	requireToolchain(t, "gcc")
 

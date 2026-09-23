@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: citron
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: citron}
+  template:
+    metadata:
+      labels: {app: citron}
+    spec:
+      # Dedicated nodes: the pods are privileged.
+      nodeSelector: {citron: "true"}
+      tolerations:
+        - {key: citron, operator: Exists, effect: NoSchedule}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: citron
+          image: citron:latest
+          args: ["citron", "-config", "/opt/citron/configs/citron.conf", "-address", "0.0.0.0:2358"]
+          ports:
+            - containerPort: 2358
+          securityContext:
+            privileged: true
+          # CPU matches scheduler.execution_slots, so timings are not skewed by contention.
+          resources:
+            requests: {cpu: "2", memory: 3Gi}
+            limits: {cpu: "2", memory: 3Gi}
+          readinessProbe:
+            httpGet: {path: /ready, port: 2358}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 2358}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: box, mountPath: /box}
+      volumes:
+        - name: box
+          emptyDir: {medium: Memory, sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: citron
+spec:
+  selector: {app: citron}
+  ports:
+    - port: 2358
+      targetPort: 2358

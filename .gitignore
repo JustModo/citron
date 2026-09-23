@@ -1,8 +1,6 @@
 /bin/
-/dist/
 *.test
 *.out
 coverage.*
 .env
-/workspaces/
-/cache/
+stress-results.json

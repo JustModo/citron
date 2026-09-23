@@ -79,158 +79,39 @@ func post(t *testing.T, h http.Handler, url, body string) *httptest.ResponseReco
 
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
-// The exact request the existing consumer sends today, and the exact fields it reads
-// back. If this test fails, pointing that consumer at this citron breaks.
-func TestLegacyGoldenRequest(t *testing.T) {
-	sub := &fakeSubmitter{result: judge.SubmissionResult{
-		Status:  judge.StatusAccepted,
-		Compile: judge.CompileResult{Success: true},
-		TestCases: []judge.TestCaseResult{{
-			Index: 0, Status: judge.StatusAccepted,
-			Stdout: []byte("5\n"), ExitCode: 0,
-			CPUTime: 12 * time.Millisecond, Memory: 2048 << 10,
-		}},
-	}}
-	h := newTestServer(t, sub)
-
-	// Byte for byte the body shape from submitCon.js.
-	body := `{"source_code":"` + b64("print(2+3)") + `","language_id":71,"stdin":"` +
-		b64("") + `","expected_output":"` + b64("5") + `"}`
-	rec := post(t, h, "/submissions?base64_encoded=true&wait=true", body)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status %d: %s", rec.Code, rec.Body)
-	}
-
-	// Decode into the shape the consumer actually reads.
-	var got struct {
-		Status struct {
-			ID          int    `json:"id"`
-			Description string `json:"description"`
-		} `json:"status"`
-		Stdout        *string `json:"stdout"`
-		Stderr        *string `json:"stderr"`
-		CompileOutput *string `json:"compile_output"`
-		Token         string  `json:"token"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("response does not match the legacy wire format: %v\n%s", err, rec.Body)
-	}
-
-	if got.Status.ID != 3 {
-		t.Errorf("status.id = %d, want 3 — the consumer treats only 3 as passing", got.Status.ID)
-	}
-	if got.Status.Description != "Accepted" {
-		t.Errorf("status.description = %q, want %q", got.Status.Description, "Accepted")
-	}
-	if got.Stdout == nil {
-		t.Fatal("stdout is null; the consumer displays it")
-	}
-	decoded, err := base64.StdEncoding.DecodeString(*got.Stdout)
-	if err != nil {
-		t.Fatalf("stdout is not base64: %v", err)
-	}
-	if string(decoded) != "5\n" {
-		t.Errorf("stdout = %q, want %q", decoded, "5\n")
-	}
-	// Absent values must be null, not empty strings.
-	if got.Stderr != nil {
-		t.Errorf("empty stderr should be null, got %q", *got.Stderr)
-	}
-	if got.CompileOutput != nil {
-		t.Errorf("empty compile_output should be null, got %q", *got.CompileOutput)
-	}
-	if got.Token == "" {
-		t.Error("token is empty")
-	}
-
-	// Citron must have received exactly one testcase, decoded.
-	if len(sub.got.TestCases) != 1 {
-		t.Fatalf("built %d testcases from a legacy request, want 1", len(sub.got.TestCases))
-	}
-	if string(sub.got.Source) != "print(2+3)" {
-		t.Errorf("source was not decoded: %q", sub.got.Source)
-	}
-	if string(sub.got.TestCases[0].ExpectedOutput) != "5" {
-		t.Errorf("expected_output was not decoded: %q", sub.got.TestCases[0].ExpectedOutput)
-	}
-}
-
-// The consumer branches on these substrings rather than on ids.
-func TestLegacyStatusMapping(t *testing.T) {
+// Wire status ids are part of the API contract.
+func TestStatusCodes(t *testing.T) {
 	tests := []struct {
-		status   judge.Status
-		wantID   int
-		contains string
+		status judge.Status
+		wantID int
 	}{
-		{judge.StatusAccepted, 3, "Accepted"},
-		{judge.StatusWrongAnswer, 4, "Wrong Answer"},
-		{judge.StatusTimeLimitExceeded, 5, "Time Limit"},
-		{judge.StatusCompilationError, 6, "Compilation"},
-		{judge.StatusRuntimeErrorSegfault, 7, "SIGSEGV"},
-		{judge.StatusRuntimeErrorFileSize, 8, "SIGXFSZ"},
-		{judge.StatusRuntimeErrorFloatingPoint, 9, "SIGFPE"},
-		{judge.StatusRuntimeErrorAborted, 10, "SIGABRT"},
-		{judge.StatusRuntimeErrorNonZeroExit, 11, "NZEC"},
-		{judge.StatusRuntimeErrorOther, 12, "Runtime Error"},
-		{judge.StatusMemoryLimitExceeded, 12, "Memory Limit"},
-		{judge.StatusOutputLimitExceeded, 12, "Output Limit"},
-		{judge.StatusSystemError, 13, "Internal Error"},
+		{judge.StatusAccepted, 3},
+		{judge.StatusWrongAnswer, 4},
+		{judge.StatusTimeLimitExceeded, 5},
+		{judge.StatusCompilationError, 6},
+		{judge.StatusRuntimeErrorSegfault, 7},
+		{judge.StatusRuntimeErrorFileSize, 8},
+		{judge.StatusRuntimeErrorFloatingPoint, 9},
+		{judge.StatusRuntimeErrorAborted, 10},
+		{judge.StatusRuntimeErrorNonZeroExit, 11},
+		{judge.StatusRuntimeErrorOther, 12},
+		{judge.StatusMemoryLimitExceeded, 12},
+		{judge.StatusOutputLimitExceeded, 12},
+		{judge.StatusSystemError, 13},
+		{judge.Status(999), 13},
 	}
 	for _, tt := range tests {
 		t.Run(tt.status.String(), func(t *testing.T) {
-			got := toLegacyStatus(tt.status)
-			if got.id != tt.wantID {
-				t.Errorf("id = %d, want %d", got.id, tt.wantID)
+			got := toStatusDTO(tt.status)
+			if got.ID != tt.wantID {
+				t.Errorf("id = %d, want %d", got.ID, tt.wantID)
 			}
-			if !strings.Contains(got.desc, tt.contains) {
-				t.Errorf("description %q should contain %q", got.desc, tt.contains)
+			if got.Description != tt.status.String() {
+				t.Errorf("description = %q, want %q", got.Description, tt.status.String())
 			}
 		})
 	}
-
-	// These two substrings are load-bearing for the consumer's overall verdict, and
-	// must not appear on statuses that do not mean them.
-	for status, j := range legacyStatuses {
-		if status != judge.StatusTimeLimitExceeded && strings.Contains(j.desc, "Time Limit") {
-			t.Errorf("%v description %q contains \"Time Limit\" but is not a timeout", status, j.desc)
-		}
-		if status != judge.StatusCompilationError && strings.Contains(j.desc, "Compilation") {
-			t.Errorf("%v description %q contains \"Compilation\" but is not a compile error", status, j.desc)
-		}
-	}
 }
-
-func TestCompilationErrorCompatResponse(t *testing.T) {
-	h := newTestServer(t, &fakeSubmitter{result: judge.SubmissionResult{
-		Status:    judge.StatusCompilationError,
-		Compile:   judge.CompileResult{Success: false, Output: []byte("main.c:1: error")},
-		TestCases: []judge.TestCaseResult{{Index: 0, Status: judge.StatusCompilationError}},
-	}})
-
-	rec := post(t, h, "/submissions?base64_encoded=true&wait=true",
-		`{"source_code":"`+b64("bad")+`","language_id":50,"stdin":"","expected_output":""}`)
-
-	var got struct {
-		Status        statusDTO `json:"status"`
-		CompileOutput *string   `json:"compile_output"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.ID != 6 {
-		t.Errorf("status.id = %d, want 6", got.Status.ID)
-	}
-	if got.CompileOutput == nil {
-		t.Fatal("compile_output is null; the student would see no diagnostics")
-	}
-	decoded, _ := base64.StdEncoding.DecodeString(*got.CompileOutput)
-	if !strings.Contains(string(decoded), "error") {
-		t.Errorf("compile_output = %q", decoded)
-	}
-}
-
-// --- native API ---
 
 func TestNativeBatchSubmission(t *testing.T) {
 	sub := &fakeSubmitter{}
@@ -269,27 +150,6 @@ func TestNativeBatchSubmission(t *testing.T) {
 	}
 }
 
-func TestNativeAndCompatShareOnePipeline(t *testing.T) {
-	// The same source through both surfaces must reach citron identically.
-	native := &fakeSubmitter{}
-	post(t, newTestServer(t, native), "/submissions",
-		`{"language_id":71,"source_code":"print(1)","testcases":[{"stdin":"x","expected_output":"1"}]}`)
-
-	compat := &fakeSubmitter{}
-	post(t, newTestServer(t, compat), "/submissions?base64_encoded=true",
-		`{"language_id":71,"source_code":"`+b64("print(1)")+`","stdin":"`+b64("x")+`","expected_output":"`+b64("1")+`"}`)
-
-	if string(native.got.Source) != string(compat.got.Source) {
-		t.Errorf("source differs: %q vs %q", native.got.Source, compat.got.Source)
-	}
-	if string(native.got.TestCases[0].Stdin) != string(compat.got.TestCases[0].Stdin) {
-		t.Error("stdin differs between the two surfaces")
-	}
-	if native.got.Limits != compat.got.Limits {
-		t.Error("limits differ between the two surfaces")
-	}
-}
-
 func TestValidation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -302,6 +162,7 @@ func TestValidation(t *testing.T) {
 		{"unknown language name", `{"language":"cobol","source_code":"x","testcases":[{}]}`, http.StatusBadRequest},
 		{"empty source", `{"language_id":71,"source_code":"","testcases":[{}]}`, http.StatusUnprocessableEntity},
 		{"empty testcase array", `{"language_id":71,"source_code":"x","testcases":[]}`, http.StatusUnprocessableEntity},
+		{"missing testcases", `{"language_id":71,"source_code":"x","stdin":"","expected_output":"5"}`, http.StatusUnprocessableEntity},
 		{"bad base64", `{"language_id":71,"source_code":"!!!not base64!!!","testcases":[{}]}`, http.StatusUnprocessableEntity},
 	}
 	h := newTestServer(t, &fakeSubmitter{})
@@ -344,7 +205,6 @@ func TestTooManyTestcasesIsRejected(t *testing.T) {
 	}
 }
 
-// A client may ask for tighter limits than configured, never looser.
 func TestRequestedLimitsAreClamped(t *testing.T) {
 	sub := &fakeSubmitter{}
 	h := newTestServer(t, sub)
@@ -475,7 +335,7 @@ func TestAuthToken(t *testing.T) {
 		t.Error("a correct token was rejected")
 	}
 
-	// Liveness must stay reachable without credentials.
+	// /health is exempt from auth.
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if rec.Code != http.StatusOK {

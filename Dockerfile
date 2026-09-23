@@ -20,7 +20,8 @@ ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY cmd/ cmd/
+COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/citron ./cmd/citron \
@@ -45,8 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=nsjail /src/nsjail/nsjail /usr/local/bin/nsjail
 COPY --from=build /out/citron /usr/local/bin/citron
 COPY configs/ /opt/citron/configs/
-COPY spike.sh entrypoint.sh /opt/citron/
-RUN chmod +x /opt/citron/spike.sh /opt/citron/entrypoint.sh
+COPY entrypoint.sh /opt/citron/
+RUN chmod +x /opt/citron/entrypoint.sh
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin citron \
     && mkdir -p /box /box/cache && chown -R citron:citron /box

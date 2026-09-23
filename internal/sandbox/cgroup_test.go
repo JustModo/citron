@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Picking the wrong hierarchy fails silently: limits nothing enforces, zeros read
-// back. This parser is where that decision is made.
 func TestParseCgroupMounts(t *testing.T) {
 	const v2Only = `
 proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0

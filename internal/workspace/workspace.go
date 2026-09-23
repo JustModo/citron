@@ -1,9 +1,3 @@
-// Package workspace hands out disposable directories.
-//
-// The security boundary this serves: infrastructure is reusable, untrusted mutable
-// state is not. Compiled artifacts are shared between testcases; the directory a
-// testcase can write to is created fresh and destroyed afterwards, so nothing one
-// testcase leaves behind is visible to the next.
 package workspace
 
 import (
@@ -13,10 +7,12 @@ import (
 	"strings"
 )
 
+// Manager creates workspaces under a single root directory.
 type Manager struct {
 	root string
 }
 
+// NewManager creates root if needed and returns a Manager for it.
 func NewManager(root string) (*Manager, error) {
 	if root == "" {
 		return nil, fmt.Errorf("workspace: root is required")
@@ -31,17 +27,16 @@ func NewManager(root string) (*Manager, error) {
 	return &Manager{root: abs}, nil
 }
 
+// Root returns the absolute root directory.
 func (m *Manager) Root() string { return m.root }
 
-// Workspace is a directory that is removed when Close is called. Close is safe to
-// call more than once, so callers can defer it and still close early.
+// Workspace is a directory that is removed by Close.
 type Workspace struct {
 	Dir    string
 	closed bool
 }
 
-// New creates a workspace. The prefix only aids debugging; uniqueness comes from
-// MkdirTemp, so two executions never collide however they are named.
+// New creates a uniquely named workspace. The sanitized prefix only aids debugging.
 func (m *Manager) New(prefix string) (*Workspace, error) {
 	dir, err := os.MkdirTemp(m.root, sanitize(prefix)+"-")
 	if err != nil {
@@ -55,6 +50,7 @@ func (m *Manager) New(prefix string) (*Workspace, error) {
 	return &Workspace{Dir: dir}, nil
 }
 
+// Close removes the workspace. It is safe to call more than once and on nil.
 func (w *Workspace) Close() error {
 	if w == nil || w.closed {
 		return nil
@@ -63,18 +59,7 @@ func (w *Workspace) Close() error {
 	return os.RemoveAll(w.Dir)
 }
 
-// Write puts a file into the workspace.
-func (w *Workspace) Write(name string, data []byte, mode os.FileMode) error {
-	if strings.ContainsAny(name, `/\`) {
-		return fmt.Errorf("workspace: %q must be a bare filename", name)
-	}
-	return os.WriteFile(filepath.Join(w.Dir, name), data, mode)
-}
-
-func (w *Workspace) Path(name string) string { return filepath.Join(w.Dir, name) }
-
-// Sweep removes everything under the root. It runs at startup to clear workspaces
-// orphaned by a crash, and at shutdown after the last execution finishes.
+// Sweep removes everything under the root, including workspaces orphaned by a crash.
 func (m *Manager) Sweep() error {
 	entries, err := os.ReadDir(m.root)
 	if err != nil {

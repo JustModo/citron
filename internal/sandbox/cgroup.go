@@ -14,10 +14,12 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// cgroup is one execution's resource container: its limits, its accounting, and
-// the kill that takes the whole process tree with it.
+// cgroup is a per-execution resource container: limits, accounting and a
+// kill that reaches the whole process tree.
 type cgroup interface {
+	// Prepare configures cmd before Start (v2 places the child at clone time).
 	Prepare(cmd *exec.Cmd)
+	// Place moves an already started process into the cgroup (v1 only).
 	Place(pid int) error
 
 	CPUTime() time.Duration
@@ -28,22 +30,22 @@ type cgroup interface {
 	Close() error
 }
 
-// cgroupManager creates one cgroup per execution. Resolved once at startup.
+// cgroupManager creates one cgroup per execution under a delegated root.
 type cgroupManager interface {
 	New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup, error)
 	Version() string
 }
 
-// v1Hierarchies are the controllers a v1 host must delegate, each with a file that
-// proves the controller is attached to the hierarchy it was found on.
+// v1Hierarchies lists the controllers a v1 host must delegate, each with a file
+// proving the controller is attached to that hierarchy.
 var v1Hierarchies = []struct{ controller, probeFile string }{
 	{"memory", "memory.limit_in_bytes"},
 	{"pids", "pids.max"},
 	{"cpuacct", "cpuacct.usage"},
 }
 
-// newCgroupManager picks a backend for this host, preferring v2. It runs at startup
-// so a misconfigured deployment fails loudly rather than leaving limits unenforced.
+// newCgroupManager picks a backend, preferring v2, and fails if neither hierarchy
+// has the required controllers delegated, so limits are never silently unenforced.
 func newCgroupManager(root string) (cgroupManager, error) {
 	mounts, err := os.Open("/proc/self/mounts")
 	if err != nil {
@@ -89,8 +91,8 @@ func cgroupUnavailable(root string, v2Err, v1Err error) error {
 	return fmt.Errorf("cgroup: no usable hierarchy: v2: %w; v1: %w", v2Err, v1Err)
 }
 
-// probeCgroup creates a real child group: a delegated parent is indistinguishable
-// from an undelegated one until you look inside one of its children.
+// probeCgroup checks for files in a real child group: controller files show up
+// only in children, so the parent alone cannot prove delegation.
 func probeCgroup(dir string, files ...string) error {
 	probe := filepath.Join(dir, "citron-probe")
 	if err := os.Mkdir(probe, 0o755); err != nil && !os.IsExist(err) {
@@ -133,6 +135,7 @@ func parseCgroupMounts(r io.Reader) (unified string, v1 map[string]string, err e
 	return unified, v1, sc.Err()
 }
 
+// unescapeMount decodes the octal escapes (e.g. \040) used in /proc/self/mounts.
 func unescapeMount(s string) string {
 	if !strings.Contains(s, `\`) {
 		return s
@@ -151,13 +154,13 @@ func unescapeMount(s string) string {
 	return b.String()
 }
 
+// within reports whether path is root or lies beneath it.
 func within(root, path string) bool {
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// readCgroupFile surfaces read errors: a backend pointed at the wrong filenames
-// must not look like a submission that used no memory.
+// readCgroupFile returns the trimmed contents of a control file.
 func readCgroupFile(dir, file string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(dir, file))
 	if err != nil {
@@ -191,8 +194,8 @@ func writeCgroupFile(dir, file, value string) error {
 	return nil
 }
 
-// removeCgroupDir retries: the kernel refuses removal until the last process in the
-// cgroup is fully reaped, which can lag the parent's wait.
+// removeCgroupDir retries because the kernel refuses rmdir until the last member
+// is reaped, which can lag the parent's Wait.
 func removeCgroupDir(dir string, kill func() error) error {
 	var err error
 	for range 50 {

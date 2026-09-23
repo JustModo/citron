@@ -28,7 +28,7 @@ func (m *managerV2) New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup
 			c.remove()
 			return nil, err
 		}
-		// Without this a memory bomb is swapped rather than killed.
+		// Without this a memory bomb swaps instead of being OOM-killed.
 		if err := c.write("memory.swap.max", "0"); err != nil && !os.IsNotExist(err) {
 			c.remove()
 			return nil, err
@@ -62,26 +62,26 @@ func (c *cgroupV2) read(file string) string {
 	return s
 }
 
-// Prepare places the process at clone time, leaving no unaccounted window.
+// Prepare uses CLONE_INTO_CGROUP so the child is accounted from clone onwards.
 func (c *cgroupV2) Prepare(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: int(c.fd.Fd())}
 }
 
 func (*cgroupV2) Place(int) error { return nil }
 
-// PeakMemory is the high-water mark of memory actually touched by this execution.
+// PeakMemory returns the cgroup's memory high-water mark.
 func (c *cgroupV2) PeakMemory() judge.MemoryBytes {
 	if v, ok := cgroupNumber(c.read("memory.peak")); ok {
 		return judge.MemoryBytes(v)
 	}
-	// Pre-5.19 kernels have no memory.peak; current beats reporting zero.
+	// Pre-5.19 kernels lack memory.peak.
 	if v, ok := cgroupNumber(c.read("memory.current")); ok {
 		return judge.MemoryBytes(v)
 	}
 	return 0
 }
 
-// OOMKilled separates "ran out of memory" from an ordinary crash.
+// OOMKilled reports whether the kernel OOM-killed any member of the cgroup.
 func (c *cgroupV2) OOMKilled() bool {
 	events := c.read("memory.events")
 	for _, key := range []string{"oom_kill", "oom_group_kill"} {
@@ -92,7 +92,7 @@ func (c *cgroupV2) OOMKilled() bool {
 	return false
 }
 
-// CPUTime is the CPU consumed by every process in the cgroup, not just the first.
+// CPUTime returns CPU time consumed by all members of the cgroup.
 func (c *cgroupV2) CPUTime() time.Duration {
 	if usec, ok := cgroupStat(c.read("cpu.stat"), "usage_usec"); ok {
 		return time.Duration(usec) * time.Microsecond
@@ -100,7 +100,7 @@ func (c *cgroupV2) CPUTime() time.Duration {
 	return 0
 }
 
-// Kill terminates the cgroup atomically; a fork bomb cannot outrun it.
+// Kill SIGKILLs the whole cgroup atomically, so concurrent forks cannot escape.
 func (c *cgroupV2) Kill() error {
 	return c.write("cgroup.kill", "1")
 }

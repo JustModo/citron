@@ -1,16 +1,6 @@
 //go:build security
 
-// Package security checks that a hostile submission cannot reach past the sandbox.
-//
-// These run against a live citron, because the thing under test is the interaction
-// between nsjail, the cgroup and the kernel — none of which a unit test can stand in
-// for. Start one with:
-//
-//	make security
-//
-// Each case asserts a specific contained outcome. "Did not crash citron" is not a
-// pass: a submission that reads /etc/shadow and exits 0 would satisfy that.
-package security
+package tests
 
 import (
 	"bytes"
@@ -54,7 +44,7 @@ type submissionResult struct {
 	Testcases []testcaseResult `json:"testcases"`
 }
 
-// submit runs one program and returns its single testcase result.
+// submit runs source as a single-testcase submission and returns the result.
 func submit(t *testing.T, languageID int, source string) (submissionResult, testcaseResult) {
 	t.Helper()
 
@@ -89,8 +79,6 @@ const (
 	langPython = 71
 )
 
-// --- resource containment ---
-
 func TestForkBombIsContained(t *testing.T) {
 	start := time.Now()
 	_, tc := submit(t, langPython, `
@@ -124,8 +112,7 @@ while True:
 	if tc.Status.Description == "Accepted" {
 		t.Fatal("memory bomb was accepted")
 	}
-	// 256 MB configured limit; allow generous slack for accounting granularity but
-	// catch a limit that is not being applied at all.
+	// Configured limit is 256 MB; the slack covers accounting granularity.
 	if tc.MemoryKB > 512*1024 {
 		t.Errorf("peak memory %d KB far exceeds the 256 MB limit", tc.MemoryKB)
 	}
@@ -165,8 +152,7 @@ while True:
 	assertCitronAlive(t)
 }
 
-// Nothing bounds a file-writing loop except the tmpfs size and RLIMIT_FSIZE. Without
-// them a submission fills the host disk, which takes down far more than citron.
+// Only the tmpfs size and RLIMIT_FSIZE bound a file-writing loop.
 func TestFileBombCannotFillTheDisk(t *testing.T) {
 	_, tc := submit(t, langPython, `
 with open("/tmp/fill", "wb") as f:
@@ -179,8 +165,6 @@ with open("/tmp/fill", "wb") as f:
 	t.Logf("file bomb: %q", tc.Status.Description)
 	assertCitronAlive(t)
 }
-
-// --- isolation ---
 
 func TestNoNetworkAccess(t *testing.T) {
 	tests := []struct {
@@ -218,10 +202,8 @@ print(urllib.request.urlopen("http://127.0.0.1:2358/languages", timeout=3).read(
 	}
 }
 
-// /proc/self/environ is deliberately absent: a process may always read its own
-// environment, and the jail's PID namespace makes /proc/1/environ the submission
-// itself. What matters is that the environment holds nothing worth reading, which
-// TestEnvironmentCarriesNoSecrets covers.
+// /proc/self/environ and /proc/1/environ are omitted: both are the submission's own
+// environment, which TestEnvironmentCarriesNoSecrets covers.
 func TestCannotReadSensitiveFiles(t *testing.T) {
 	for _, path := range []string{
 		"/etc/shadow",
@@ -245,8 +227,7 @@ except Exception as e:
 	}
 }
 
-// Citron's configuration carries the auth token and internal paths. A submission
-// must not be able to walk out of its workspace to find it.
+// The citron config, which holds the auth token, must be unreachable from the workspace.
 func TestPathTraversalCannotEscapeTheWorkspace(t *testing.T) {
 	_, tc := submit(t, langPython, `
 import os
@@ -271,8 +252,7 @@ try:
 except Exception as e:
     print("DENIED", type(e).__name__)
 `)
-	// /box inside the jail is this execution's own workspace. Seeing sibling
-	// workspaces or the shared compile cache would mean the mount is wrong.
+	// /box must show only this execution's workspace, not siblings or the compile cache.
 	for _, leak := range []string{"cache", "tc-", "building-"} {
 		if strings.Contains(tc.Stdout, leak) {
 			t.Errorf("a submission can see other executions' state (%q): %q", leak, tc.Stdout)
@@ -304,6 +284,19 @@ print("uid", os.getuid(), "gid", os.getgid())
 	}
 }
 
+// no_new_privs must neutralise setuid binaries such as su, which matters when the jail
+// shares the container's user namespace (sandbox.user_namespace = false).
+func TestSetuidCannotElevate(t *testing.T) {
+	_, tc := submit(t, langPython, `
+for line in open("/proc/self/status"):
+    if line.startswith("NoNewPrivs:"):
+        print(line.split()[1])
+`)
+	if strings.TrimSpace(tc.Stdout) != "1" {
+		t.Errorf("no_new_privs is not set (got %q); setuid binaries could gain root", tc.Stdout)
+	}
+}
+
 func TestCannotMount(t *testing.T) {
 	_, tc := submit(t, langC, `
 #include <stdio.h>
@@ -319,8 +312,7 @@ int main(void) {
 	}
 }
 
-// A process that outlives its parent would hold the workspace open and keep burning
-// CPU after the verdict is returned.
+// Orphaned descendants must be killed when the execution ends.
 func TestDescendantsDoNotSurvive(t *testing.T) {
 	_, tc := submit(t, langPython, `
 import os, sys
@@ -334,8 +326,7 @@ sys.exit(0)
 `)
 	t.Logf("orphan test: %q", tc.Status.Description)
 
-	// If the child survived it would still be consuming a CPU. A later submission
-	// finishing promptly is the observable proof that it did not.
+	// A surviving child would still burn CPU, slowing the next submission.
 	start := time.Now()
 	_, quick := submit(t, langPython, `print("still responsive")`)
 	if d := time.Since(start); d > 20*time.Second {

@@ -1,0 +1,9 @@
+{
+  "language": "python",
+  "source_code": "a, b = map(int, input().split())\nprint(a + b)\n",
+  "testcases": [
+    {"stdin": "2 3", "expected_output": "5"},
+    {"stdin": "10 -4", "expected_output": "6"},
+    {"stdin": "0 0", "expected_output": "0"}
+  ]
+}

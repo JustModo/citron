@@ -1,6 +1,3 @@
-// Package lang turns declarative language manifests into the argv the sandbox runs.
-// Adding a language is normally a block in languages.toml; the Hook interface exists
-// for the few that need behaviour a template cannot express.
 package lang
 
 import (
@@ -16,6 +13,8 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
+// Manifest is one [[language]] entry in languages.toml. Compile and Run are
+// text/template argv whose fields are those of renderCtx.
 type Manifest struct {
 	ID     int    `toml:"id"`
 	Name   string `toml:"name"`
@@ -27,15 +26,15 @@ type Manifest struct {
 	Run     []string `toml:"run"`
 	Probe   []string `toml:"probe"`
 
-	// Hook names a Go-side behaviour for languages a template cannot describe.
+	// Hook is a key into Hooks; empty for none.
 	Hook string `toml:"hook"`
 
 	Limits ManifestLimits `toml:"limits"`
 }
 
-// ManifestLimits adjusts the configured execution limits for one language. A runtime
-// with a fixed startup cost needs more than the baseline, or every submission in that
-// language fails for reasons unrelated to the submitted code.
+// ManifestLimits adjusts the configured execution limits for one language, for
+// runtimes whose fixed overhead would otherwise exhaust the baseline. Zero fields
+// leave the base limit unchanged.
 type ManifestLimits struct {
 	MemoryExtraMB  int64   `toml:"memory_extra_mb"`
 	MaxProcesses   int     `toml:"max_processes"`
@@ -47,8 +46,8 @@ func scale(d time.Duration, f float64) time.Duration {
 	return time.Duration(float64(d) * f)
 }
 
-// Apply returns limits adjusted for this language. The extra memory is added to the
-// enforced ceiling, not to what the submission is told it may use.
+// Apply returns l adjusted for this language. Extra memory raises the enforced
+// ceiling, not the amount the submission is told it may use.
 func (ml ManifestLimits) Apply(l judge.Limits) judge.Limits {
 	out := l
 	if ml.WallMultiplier > 0 {
@@ -66,9 +65,8 @@ func (ml ManifestLimits) Apply(l judge.Limits) judge.Limits {
 	return out
 }
 
-// renderCtx holds every value a manifest template may reference. All of it is
-// citron-controlled: filenames come from the manifest or a sanitized hook, numbers
-// from configuration. Submitted source never reaches a template.
+// renderCtx holds every value a manifest template may reference. None of it comes
+// from submitted source; filenames are from the manifest or a sanitizing hook.
 type renderCtx struct {
 	Source  string
 	Binary  string
@@ -78,6 +76,7 @@ type renderCtx struct {
 	MemMB   int64
 }
 
+// Language is a validated manifest with its argv templates parsed.
 type Language struct {
 	manifest Manifest
 	hook     Hook
@@ -85,22 +84,28 @@ type Language struct {
 	run      []*template.Template
 }
 
-func (l *Language) ID() judge.LanguageID   { return judge.LanguageID(l.manifest.ID) }
-func (l *Language) Name() string           { return l.manifest.Name }
-func (l *Language) Label() string          { return l.manifest.Label }
-func (l *Language) Manifest() Manifest     { return l.manifest }
+// ID returns the language's numeric id.
+func (l *Language) ID() judge.LanguageID { return judge.LanguageID(l.manifest.ID) }
+
+// Name returns the language's unique lower-case name.
+func (l *Language) Name() string { return l.manifest.Name }
+
+// Label returns the language's display name.
+func (l *Language) Label() string { return l.manifest.Label }
+
+// ProbeCommand returns the argv that prints the toolchain version, or nil.
 func (l *Language) ProbeCommand() []string { return l.manifest.Probe }
 
 // Compiled reports whether the language produces an artifact that testcases share.
-// Interpreted languages still have a compile step here (a syntax check), so this asks
-// whether the artifact is a binary rather than whether a compile command exists.
+// It checks for a binary, not a compile command, because interpreted languages may
+// compile only as a syntax check.
 func (l *Language) Compiled() bool { return l.manifest.Binary != "" }
 
-// Limits adjusts the configured limits for this language.
+// Limits returns base adjusted for this language.
 func (l *Language) Limits(base judge.Limits) judge.Limits { return l.manifest.Limits.Apply(base) }
 
-// Files returns the source filename and artifact name for a submission. The hook may
-// derive them from the source; Java must name the file after its public class.
+// Files returns the source filename and artifact name for a submission, derived by
+// the language's hook when it has one.
 func (l *Language) Files(source []byte) (src, binary string) {
 	src, binary = l.manifest.Source, l.manifest.Binary
 	if l.hook != nil {
@@ -109,17 +114,20 @@ func (l *Language) Files(source []byte) (src, binary string) {
 	return src, binary
 }
 
-// CompileArgv is nil when the language has no compile step.
+// CompileArgv renders the compile command. It returns nil when the language has no
+// compile step.
 func (l *Language) CompileArgv(c Context) ([]string, error) { return render(l.compile, c) }
-func (l *Language) RunArgv(c Context) ([]string, error)     { return render(l.run, c) }
 
-// Context is what a caller must supply to build argv.
+// RunArgv renders the run command.
+func (l *Language) RunArgv(c Context) ([]string, error) { return render(l.run, c) }
+
+// Context supplies the values needed to render argv.
 type Context struct {
 	Source  string
 	Binary  string
 	Dir     string
 	Limits  judge.Limits
-	BaseMem judge.MemoryBytes // memory before the language's extra headroom
+	BaseMem judge.MemoryBytes // memory before the language's extra headroom; sizes HeapMB
 }
 
 func render(tmpls []*template.Template, c Context) ([]string, error) {
@@ -161,6 +169,7 @@ func compileTemplates(name string, argv []string) ([]*template.Template, error) 
 	return out, nil
 }
 
+// ErrInvalidManifest is wrapped by every manifest validation error.
 var ErrInvalidManifest = errors.New("invalid language manifest")
 
 func (m Manifest) validate(hooks Hooks) error {

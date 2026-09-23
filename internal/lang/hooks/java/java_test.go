@@ -39,8 +39,7 @@ func TestClassNameExtraction(t *testing.T) {
 	}
 }
 
-// The class name becomes a filename and a command-line argument, so a hostile one
-// must never escape the shape of an identifier.
+// The class name becomes a filename and argv element, so it must be a plain identifier.
 func TestClassNameIsSanitized(t *testing.T) {
 	safe := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\.java$`)
 	for _, source := range []string{

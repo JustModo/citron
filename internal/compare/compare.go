@@ -1,34 +1,27 @@
-// Package compare decides whether a program's output matches what was expected.
-//
-// It is deliberately separate from execution: the sandbox reports what a program
-// printed, and nothing about how that is judged leaks into it. Adding a policy
-// (float tolerance, token order, a checker program) means adding a Comparator.
 package compare
 
 import "bytes"
 
+// Comparator is an output-matching policy.
 type Comparator interface {
 	Equal(expected, actual []byte) bool
 	Name() string
 }
 
-// TrimTrailing ignores trailing whitespace and line-ending style, and nothing else.
-// This matches the semantics the existing consumer already relies on, so verdicts do
-// not change when the judge behind it does.
+// TrimTrailing compares output ignoring only trailing whitespace and line-ending
+// style, since programs commonly differ in final newlines or CRLF output.
 type TrimTrailing struct{}
 
+// Name returns "trim-trailing".
 func (TrimTrailing) Name() string { return "trim-trailing" }
 
+// Equal reports whether expected and actual match after normalization.
 func (TrimTrailing) Equal(expected, actual []byte) bool {
 	return bytes.Equal(normalize(expected), normalize(actual))
 }
 
-// Exact compares byte for byte.
-type Exact struct{}
-
-func (Exact) Name() string                       { return "exact" }
-func (Exact) Equal(expected, actual []byte) bool { return bytes.Equal(expected, actual) }
-
+// normalize converts CRLF and CR to LF and trims trailing whitespace. It copies
+// before rewriting, so b is never modified.
 func normalize(b []byte) []byte {
 	if bytes.IndexByte(b, '\r') >= 0 {
 		b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
@@ -37,5 +30,5 @@ func normalize(b []byte) []byte {
 	return bytes.TrimRight(b, " \t\n\v\f")
 }
 
-// Default is the comparator used when a submission does not ask for another.
+// Default returns the comparator used when a submission does not specify one.
 func Default() Comparator { return TrimTrailing{} }

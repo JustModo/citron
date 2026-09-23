@@ -18,15 +18,9 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// CompileCache stores compiled artifacts keyed by the content that produced them.
-//
-// This is what makes one-request-per-testcase clients fast. Such a client sends the
-// same source N times; without a cache that is N compilations of identical input. The
-// key covers the source, the language and the exact compile argv, so a cached artifact
-// can only be reused for input that would have produced it anyway.
-//
-// Failed compilations are cached too: a submission with a syntax error is otherwise
-// the worst case, recompiling N times to produce the same error.
+// CompileCache stores compiled artifacts on disk, keyed by language, source and
+// compile argv. Failed compilations are cached too, so a resubmitted source with a
+// compile error is not recompiled for every request.
 type CompileCache struct {
 	root       string
 	maxEntries int
@@ -35,6 +29,8 @@ type CompileCache struct {
 	mu sync.Mutex
 }
 
+// NewCompileCache creates a cache rooted at root holding at most maxEntries entries
+// (128 if maxEntries is not positive).
 func NewCompileCache(root string, maxEntries int) (*CompileCache, error) {
 	if maxEntries <= 0 {
 		maxEntries = 128
@@ -45,7 +41,8 @@ func NewCompileCache(root string, maxEntries int) (*CompileCache, error) {
 	return &CompileCache{root: root, maxEntries: maxEntries}, nil
 }
 
-// Key identifies a compilation. Anything that changes the output must be in here.
+// Key returns the cache key for a compilation. Every input that affects the output
+// must be hashed here.
 func Key(language judge.LanguageID, source []byte, argv []string) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "v1\x00%d\x00", language)
@@ -74,12 +71,10 @@ func (c *CompileCache) Build(key string, build func(dir string) (judge.CompileRe
 	if e, ok := c.lookup(key); ok {
 		return e, nil
 	}
-	// Only the leader's closure runs, so this stays false for every caller that
-	// merely waited on it. Each caller has its own copy, written by its own
-	// goroutine, so there is nothing to synchronize.
+	// Only the singleflight leader's closure runs, so compiled stays false for waiters.
 	compiled := false
 	v, err, _ := c.sf.Do(key, func() (any, error) {
-		// Another caller may have finished while this one waited.
+		// Re-check: a previous flight may have finished after the first lookup.
 		if e, ok := c.lookup(key); ok {
 			return e, nil
 		}
@@ -90,8 +85,7 @@ func (c *CompileCache) Build(key string, build func(dir string) (judge.CompileRe
 		return Entry{}, err
 	}
 	e := v.(Entry)
-	// Cached means "this caller did not pay for the compilation" — true both for a
-	// hit on disk and for a caller that shared someone else's in-flight compile.
+	// Cached means this caller did not compile: a disk hit or a shared in-flight build.
 	e.Result.Cached = !compiled
 	return e, nil
 }
@@ -106,7 +100,7 @@ func (c *CompileCache) lookup(key string) (Entry, bool) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return Entry{}, false
 	}
-	_ = os.Chtimes(dir, time.Now(), time.Now()) // for LRU eviction
+	_ = os.Chtimes(dir, time.Now(), time.Now()) // mtime drives LRU eviction
 	return Entry{
 		Dir: dir,
 		Result: judge.CompileResult{
@@ -120,17 +114,23 @@ func (c *CompileCache) lookup(key string) (Entry, bool) {
 
 const metaFile = ".citron-meta.json"
 
+// build compiles into a staging directory and renames it into place as the entry.
 func (c *CompileCache) build(key string, build func(dir string) (judge.CompileResult, error)) (Entry, error) {
 	staging, err := os.MkdirTemp(c.root, "building-")
 	if err != nil {
 		return Entry{}, fmt.Errorf("compile cache: %w", err)
 	}
-	if err := os.Chmod(staging, 0o755); err != nil {
+	// The compiler runs as the jail's unprivileged uid and must write here; the
+	// finished entry is made read-only to others.
+	if err := os.Chmod(staging, 0o777); err != nil {
 		_ = os.RemoveAll(staging)
 		return Entry{}, fmt.Errorf("compile cache: %w", err)
 	}
 
 	result, err := build(staging)
+	if err == nil {
+		err = os.Chmod(staging, 0o755)
+	}
 	if err != nil {
 		_ = os.RemoveAll(staging)
 		return Entry{}, err
@@ -149,8 +149,8 @@ func (c *CompileCache) build(key string, build func(dir string) (judge.CompileRe
 	}
 
 	final := filepath.Join(c.root, key)
-	// Rename is atomic, so a reader never sees a half-written entry. Losing the race
-	// is fine: the winner's artifact is byte-identical by construction.
+	// Rename is atomic, so readers never see a partial entry. If another process won
+	// the race, its entry has identical content.
 	if err := os.Rename(staging, final); err != nil {
 		_ = os.RemoveAll(staging)
 		if e, ok := c.lookup(key); ok {
@@ -196,11 +196,8 @@ func (c *CompileCache) evict() {
 	}
 }
 
-// CopyInto copies an entry's artifacts into a testcase workspace.
-//
-// Copying rather than sharing the directory keeps every testcase's writable state
-// private, which is the whole point of a fresh workspace. Artifacts here are
-// kilobytes, so the cost is noise.
+// CopyInto copies an entry's artifacts into a testcase workspace. Copying rather
+// than sharing keeps each testcase's writable state private.
 func CopyInto(entry Entry, dir string) error {
 	files, err := os.ReadDir(entry.Dir)
 	if err != nil {

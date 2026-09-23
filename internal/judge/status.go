@@ -1,10 +1,10 @@
 package judge
 
-// Status is the verdict for a testcase or a whole submission. It is citron's own
-// vocabulary; the integer codes used on the wire live in the API layer so the domain
-// never depends on a transport format.
+// Status is the verdict for a testcase or a whole submission. Wire codes are
+// defined by the API layer, not here.
 type Status int
 
+// Verdicts.
 const (
 	StatusAccepted Status = iota
 	StatusWrongAnswer
@@ -37,6 +37,7 @@ var statusNames = map[Status]string{
 	StatusSystemError:               "System Error",
 }
 
+// String returns the verdict description, or "Unknown" for an undefined value.
 func (s Status) String() string {
 	if n, ok := statusNames[s]; ok {
 		return n
@@ -44,12 +45,8 @@ func (s Status) String() string {
 	return "Unknown"
 }
 
-func (s Status) IsRuntimeError() bool {
-	return s >= StatusRuntimeErrorSegfault && s <= StatusRuntimeErrorOther
-}
-
-// severity orders statuses for aggregation: the worst testcase decides the
-// submission verdict. Higher wins.
+// severity ranks statuses for Aggregate; higher wins. Order: Accepted < WrongAnswer
+// < OutputLimit < MemoryLimit < runtime errors < TimeLimit < Compilation < System.
 func (s Status) severity() int {
 	switch s {
 	case StatusAccepted:

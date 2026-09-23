@@ -1,0 +1,8 @@
+# Started by: node bench/stress.js --profile baseline
+services:
+  citron:
+    extends:
+      file: ../../compose.yaml
+      service: citron
+networks:
+  citron:

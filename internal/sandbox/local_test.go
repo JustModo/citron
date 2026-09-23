@@ -121,8 +121,7 @@ func TestOutputBombIsBoundedAndKilled(t *testing.T) {
 	}
 }
 
-// A program that forks and exits must not leave its children behind holding the
-// workspace open. This is the one that catches killing the pid instead of the group.
+// Catches killing only the pid instead of the whole process group.
 func TestDescendantsDoNotSurvive(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "alive")
@@ -131,7 +130,7 @@ func TestDescendantsDoNotSurvive(t *testing.T) {
 	lim.WallTime = 2 * time.Second
 	lim.CPUTime = time.Second
 
-	// The child outlives the parent and would write the marker a second later.
+	// The background child outlives the parent and would write the marker later.
 	run(t, Spec{
 		Dir:    dir,
 		Argv:   sh(`(sleep 3; touch ` + marker + `) & echo started`),
@@ -196,10 +195,6 @@ func TestCPUTimeIsMeasured(t *testing.T) {
 	}
 }
 
-// The local driver deliberately does not bound process count: RLIMIT_NPROC is
-// per-uid across the whole machine, so setting it here breaks unrelated processes
-// owned by the same user. Containment is the cgroup's pids.max, exercised against
-// nsjail in tests/security.
 func TestFileSizeLimitIsEnforcedWhenPrlimitExists(t *testing.T) {
 	if _, err := exec.LookPath("prlimit"); err != nil {
 		t.Skip("prlimit not installed")

@@ -1,5 +1,3 @@
-// Package judge holds the domain model. It imports nothing outside the standard
-// library and knows nothing about HTTP, Redis, Docker, nsjail or the filesystem.
 package judge
 
 import (
@@ -8,6 +6,7 @@ import (
 	"time"
 )
 
+// Identifier and unit types.
 type (
 	SubmissionID  string
 	LanguageID    int
@@ -15,24 +14,27 @@ type (
 	MemoryBytes   int64
 )
 
+// MB returns m in whole mebibytes, rounded down.
 func (m MemoryBytes) MB() int64 { return int64(m) / (1 << 20) }
 
-// Limits bounds a single execution. Every field is enforced; a zero value means
-// "not configured" and is rejected by Validate rather than silently unbounded.
+// Limits bounds a single execution. A zero limit is rejected by Validate rather
+// than treated as unbounded.
 type Limits struct {
 	CPUTime      time.Duration
-	CPUExtraTime time.Duration
+	CPUExtraTime time.Duration // grace after WallTime for the sandbox to kill an overrun
 	WallTime     time.Duration
 	Memory       MemoryBytes
 	Stack        MemoryBytes
 	MaxProcesses int
-	MaxFileSize  int64
-	MaxStdout    int64
-	MaxStderr    int64
+	MaxFileSize  int64 // bytes
+	MaxStdout    int64 // bytes
+	MaxStderr    int64 // bytes
 }
 
+// ErrInvalidLimits is wrapped by every Limits validation error.
 var ErrInvalidLimits = errors.New("invalid limits")
 
+// Validate reports the first limit that is unset or inconsistent.
 func (l Limits) Validate() error {
 	for _, c := range []struct {
 		ok   bool
@@ -55,18 +57,19 @@ func (l Limits) Validate() error {
 	return nil
 }
 
-// Deadline is the hard wall-clock ceiling for one execution, including the grace
-// the sandbox needs to notice a CPU overrun and kill the process tree.
+// Deadline returns the hard wall-clock ceiling for one execution, including the
+// grace the sandbox needs to kill an overrunning process tree.
 func (l Limits) Deadline() time.Duration { return l.WallTime + l.CPUExtraTime }
 
+// TestCase is one input and its expected output.
 type TestCase struct {
 	Index          TestCaseIndex
 	Stdin          []byte
 	ExpectedOutput []byte
 }
 
-// Submission is one source file run against N testcases. Compilation happens once
-// for the whole submission; every testcase gets a fresh writable workspace.
+// Submission is one source file run against its testcases. It is compiled once;
+// each testcase runs in a fresh workspace.
 type Submission struct {
 	ID        SubmissionID
 	Language  LanguageID
@@ -75,6 +78,7 @@ type Submission struct {
 	Limits    Limits
 }
 
+// Validate reports whether the submission is complete and its limits are valid.
 func (s Submission) Validate() error {
 	switch {
 	case s.ID == "":

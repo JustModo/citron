@@ -2,12 +2,9 @@ package sandbox
 
 import "bytes"
 
-// limitWriter buffers at most max bytes and reports whether more arrived.
-//
-// It never returns an error and never stops accepting writes: refusing them would
-// block the writing process in the kernel and turn an output bomb into a hang. Bytes
-// past the limit are dropped, and onExceed fires once so the caller can kill the
-// process tree instead of letting it produce output forever.
+// limitWriter buffers at most max bytes and drops the rest. It never fails a write:
+// refusing would block the writer in the kernel and turn an output bomb into a hang.
+// onExceed fires once, on the first dropped byte, so the caller can kill the process.
 type limitWriter struct {
 	buf       bytes.Buffer
 	max       int64

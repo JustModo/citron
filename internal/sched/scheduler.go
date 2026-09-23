@@ -10,26 +10,21 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// ErrDraining is returned once shutdown has begun. It is a refusal to start new work,
-// not a failure of the work already running.
+// ErrDraining is returned for submissions arriving after Drain has been called.
 var ErrDraining = errors.New("citron is shutting down")
 
-// ErrOverloaded is returned when citron is already running as much as it is
-// configured to. Degrading into a clear refusal beats accepting work that will then
-// time out on the client.
+// ErrOverloaded is returned when a submission waits longer than the queue limit for
+// a slot.
 var ErrOverloaded = errors.New("citron is at capacity")
 
-// Runner is the piece that actually executes a submission.
+// Runner executes a submission.
 type Runner interface {
 	Run(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error)
 }
 
-// Scheduler bounds how many submissions run at once and makes shutdown orderly.
-//
-// Fairness comes from two limits working together: a cap on concurrent submissions
-// here, and a cap on concurrent testcases per submission inside the runner. A
-// thousand-testcase submission therefore occupies one submission slot and a handful
-// of executions, leaving room for the ten-testcase submissions behind it.
+// Scheduler bounds concurrent submissions and coordinates graceful shutdown.
+// Together with the runner's per-submission testcase limit, a large submission
+// cannot starve smaller ones.
 type Scheduler struct {
 	runner       Runner
 	slots        chan struct{}
@@ -41,10 +36,8 @@ type Scheduler struct {
 	queued   atomic.Int64
 }
 
-// NewScheduler bounds concurrent submissions, and bounds how long one may wait for a
-// slot. The wait matters as much as the limit: without it an overloaded citron keeps
-// accepting work and every client eventually times out having been told nothing,
-// which is worse than being refused immediately.
+// NewScheduler returns a Scheduler running at most maxConcurrent submissions, each
+// waiting at most maxQueueWait for a slot (0 means no limit).
 func NewScheduler(runner Runner, maxConcurrent int, maxQueueWait time.Duration) *Scheduler {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
@@ -56,15 +49,13 @@ func NewScheduler(runner Runner, maxConcurrent int, maxQueueWait time.Duration) 
 	}
 }
 
-// Submit runs a submission, waiting for a slot if necessary.
+// Submit runs sub, waiting for a slot if necessary.
 func (s *Scheduler) Submit(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error) {
 	if s.draining.Load() {
 		return judge.SubmissionResult{}, ErrDraining
 	}
 
-	// Bounded wait. Past this citron is not going to get to this submission in
-	// time to be useful, so it says so rather than holding the connection until the
-	// client gives up.
+	// Bounded so an overloaded server refuses quickly instead of letting clients time out.
 	waitCtx := ctx
 	if s.maxQueueWait > 0 {
 		var cancel context.CancelFunc
@@ -79,15 +70,14 @@ func (s *Scheduler) Submit(ctx context.Context, sub judge.Submission) (judge.Sub
 	case <-waitCtx.Done():
 		s.queued.Add(-1)
 		if ctx.Err() == nil {
-			// The caller is still waiting; it was our own queue limit that expired.
+			// The queue limit expired, not the caller's context.
 			return judge.SubmissionResult{}, ErrOverloaded
 		}
 		return judge.SubmissionResult{}, ctx.Err()
 	}
 	defer func() { <-s.slots }()
 
-	// Checked again after waiting: draining may have started while queued, and the
-	// WaitGroup must not be incremented once Drain is counting down.
+	// Re-check: Drain may have started while queued, and wg must not grow after it.
 	if s.draining.Load() {
 		return judge.SubmissionResult{}, ErrDraining
 	}
@@ -100,34 +90,8 @@ func (s *Scheduler) Submit(ctx context.Context, sub judge.Submission) (judge.Sub
 	return s.runner.Run(ctx, sub)
 }
 
-// TrySubmit refuses rather than waits when every slot is busy. The HTTP layer uses it
-// to answer 503 instead of holding a connection open past the client's patience.
-func (s *Scheduler) TrySubmit(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error) {
-	if s.draining.Load() {
-		return judge.SubmissionResult{}, ErrDraining
-	}
-	select {
-	case s.slots <- struct{}{}:
-	default:
-		return judge.SubmissionResult{}, ErrOverloaded
-	}
-	defer func() { <-s.slots }()
-
-	if s.draining.Load() {
-		return judge.SubmissionResult{}, ErrDraining
-	}
-
-	s.wg.Add(1)
-	defer s.wg.Done()
-	s.active.Add(1)
-	defer s.active.Add(-1)
-
-	return s.runner.Run(ctx, sub)
-}
-
-// Drain stops accepting submissions and waits for the running ones to finish. If ctx
-// expires first it returns the context's error; the caller then cancels the root
-// context, which kills the sandboxes and their process trees.
+// Drain stops accepting submissions and waits for running ones to finish. It returns
+// ctx's error if ctx expires first; the caller should then cancel running work.
 func (s *Scheduler) Drain(ctx context.Context) error {
 	s.draining.Store(true)
 
@@ -145,7 +109,11 @@ func (s *Scheduler) Drain(ctx context.Context) error {
 	}
 }
 
-func (s *Scheduler) Active() int64  { return s.active.Load() }
-func (s *Scheduler) Queued() int64  { return s.queued.Load() }
+// Active returns the number of running submissions.
+func (s *Scheduler) Active() int64 { return s.active.Load() }
+
+// Queued returns the number of submissions waiting for a slot.
+func (s *Scheduler) Queued() int64 { return s.queued.Load() }
+
+// Draining reports whether Drain has been called.
 func (s *Scheduler) Draining() bool { return s.draining.Load() }
-func (s *Scheduler) Capacity() int  { return cap(s.slots) }

@@ -1,8 +1,3 @@
-// Command citron runs the code judge: HTTP API and execution in one process.
-//
-// This file is the composition root. Every dependency is constructed here and
-// injected downwards; no package reaches out for a connection, a logger or a
-// configuration value of its own.
 package main
 
 import (
@@ -36,10 +31,7 @@ var version = "dev"
 func main() {
 	configPath := flag.String("config", "configs/citron.conf", "path to citron.conf")
 	showLanguages := flag.Bool("languages", false, "probe the configured toolchains and exit")
-	// The config file defaults to loopback, which is right when the binary runs on a
-	// host directly. In a container the network namespace is the boundary, so the
-	// process must bind the container's own 0.0.0.0 and Docker decides who may reach
-	// the published port.
+	// Lets containers bind 0.0.0.0 while the config file defaults to loopback.
 	address := flag.String("address", "", "override server.address from the config file")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -56,8 +48,6 @@ func main() {
 }
 
 func runCitron(configPath string, showLanguages bool, address string) error {
-	// A broken configuration is fatal at startup. It is the one class of error that
-	// should stop the process rather than degrade it.
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -81,8 +71,6 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 	}
 	for _, t := range toolchains {
 		if !t.Available {
-			// Accepting submissions for a language that cannot run produces
-			// failures no student can act on.
 			if cfg.Languages.RequireToolchains {
 				return fmt.Errorf("language %q is configured but its toolchain is missing: %w", t.Language, t.Err)
 			}
@@ -102,7 +90,7 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 	if err != nil {
 		return err
 	}
-	// Clear anything a previous crash left behind before accepting work.
+	// Remove workspaces left by a previous crash.
 	if err := workspaces.Sweep(); err != nil {
 		log.Warn("could not sweep stale workspaces", "error", err)
 	}
@@ -153,9 +141,8 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 	return serve(httpServer, scheduler, workspaces, cfg, log)
 }
 
-// serve runs until a signal arrives, then shuts down in the order that leaves nothing
-// running: stop accepting work, let in-flight submissions finish, kill what refuses
-// to, then close the listener.
+// serve runs until SIGINT or SIGTERM, then drains the scheduler before shutting down
+// the HTTP server so in-flight submissions can still respond.
 func serve(
 	httpServer *http.Server,
 	scheduler *sched.Scheduler,
@@ -184,7 +171,6 @@ func serve(
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownGrace())
 	defer cancel()
 
-	// Refuse new submissions and wait for the running ones.
 	if err := scheduler.Drain(shutdownCtx); err != nil {
 		log.Warn("drain timed out; terminating running executions", "active", scheduler.Active())
 	}
@@ -207,17 +193,18 @@ func newSandbox(cfg config.Config, log *slog.Logger) (sandbox.Sandbox, error) {
 			ReadOnly:   cfg.Sandbox.ReadOnly,
 			Symlinks:   cfg.Sandbox.Symlinks,
 			TmpfsMB:    cfg.Sandbox.TmpfsMB,
+			// Inverted so the zero value of NsjailConfig is the stricter jail.
+			NoUserNamespace: !cfg.Sandbox.UserNamespace,
 		}, log)
 	case "local":
-		// Configuration validation already required an explicit opt-in.
+		// Config validation requires an explicit opt-in for this unsandboxed driver.
 		return sandbox.NewLocal(log), nil
 	default:
 		return nil, fmt.Errorf("unknown sandbox driver %q", cfg.Sandbox.Driver)
 	}
 }
 
-// capacity joins the two things that bound throughput — submission slots and the
-// memory budget — into the single view the metrics gauges sample.
+// capacity adapts the scheduler and admitter to metrics.Capacity.
 type capacity struct {
 	scheduler *sched.Scheduler
 	admitter  *sched.Admitter
@@ -229,8 +216,7 @@ func (c capacity) InFlightExecutions() int64 { return c.admitter.InFlight() }
 func (c capacity) ReservedMB() int64         { return c.admitter.ReservedMB() }
 func (c capacity) BudgetMB() int64           { return c.admitter.BudgetMB() }
 
-// health answers /ready. Being at capacity is not unready — it is the system working
-// as configured — but shutting down is.
+// health reports unready only while draining; being at capacity is still ready.
 type health struct{ scheduler *sched.Scheduler }
 
 func (h *health) Ready() (bool, string) {
@@ -250,8 +236,8 @@ func newLogger(cfg config.Log) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
 }
 
-// resolveRelative interprets a path in the config file relative to that file, so the
-// citron can be started from any directory.
+// resolveRelative returns path if it is absolute or exists; otherwise it looks for
+// the same file name next to the config file.
 func resolveRelative(configPath, path string) string {
 	if filepath.IsAbs(path) {
 		return path

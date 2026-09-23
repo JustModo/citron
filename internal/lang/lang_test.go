@@ -8,9 +8,8 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// Tests here cover the manifest machinery only, using inline manifests and a stub
-// hook. The shipped languages.toml and the real hooks are exercised in
-// internal/lang/hooks, which can import both without a cycle.
+// The shipped languages.toml and real hooks are tested in package hooks, which can
+// import both without a cycle.
 
 func baseLimits() judge.Limits {
 	return judge.Limits{
@@ -20,8 +19,7 @@ func baseLimits() judge.Limits {
 	}
 }
 
-// stubHook stands in for a real language hook: it renames the source after the first
-// line of the submission, which is enough to prove the hook is consulted.
+// stubHook names the source after its first line.
 type stubHook struct{}
 
 func (stubHook) Files(source []byte, m Manifest) (string, string) {
@@ -130,7 +128,6 @@ func TestArgvRendering(t *testing.T) {
 	}
 }
 
-// A hook, when configured, decides the filenames instead of the manifest.
 func TestHookOverridesFilenames(t *testing.T) {
 	body := `
 [[language]]
@@ -187,14 +184,12 @@ cpu_multiplier = 1.5
 	if got.CPUTime != 3*time.Second {
 		t.Errorf("cpu time = %v, want 3s", got.CPUTime)
 	}
-	// Untouched fields must survive.
 	if got.MaxStdout != base.MaxStdout {
 		t.Error("multipliers altered an unrelated limit")
 	}
 }
 
-// A runtime that sizes a heap must be given what the submission was promised, not
-// the padded ceiling — otherwise the headroom is handed straight back to the heap.
+// HeapMB must come from BaseMem, not the ceiling, or the headroom goes to the heap.
 func TestBaseMemoryIsSeparateFromTheCeiling(t *testing.T) {
 	body := `
 [[language]]
@@ -259,7 +254,6 @@ func TestManifestValidation(t *testing.T) {
 	}
 }
 
-// A language needing no custom behaviour should need no Go code at all.
 func TestAddingALanguageIsConfigOnly(t *testing.T) {
 	r := registryFrom(t, `
 [[language]]

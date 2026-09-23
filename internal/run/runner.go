@@ -1,5 +1,3 @@
-// Package run turns a submission into results: compile once, execute every testcase,
-// compare, aggregate.
 package run
 
 import (
@@ -20,24 +18,22 @@ import (
 	"github.com/JustModo/citron/internal/workspace"
 )
 
-// Options are the knobs the runner needs, already resolved from configuration.
+// Options configures a Runner.
 type Options struct {
 	CompileLimits   judge.Limits
 	MaxParallel     int
 	SubmissionLimit time.Duration
-	// Observer is optional; nil disables metrics.
+	// Observer may be nil to disable metrics.
 	Observer Observer
 }
 
-// Observer records finished submissions. It is optional; a nil Observer disables
-// metrics without any conditional logic on the hot path.
+// Observer records finished submissions.
 type Observer interface {
 	ObserveSubmission(language string, res judge.SubmissionResult)
 }
 
-// Admitter reserves machine capacity for one execution. The runner asks before every
-// compile and every testcase, so citron never starts work the machine cannot hold.
-// A nil Admitter means no admission control, which is only appropriate in tests.
+// Admitter reserves machine capacity for one execution. The runner acquires before
+// every compile and testcase. A nil Admitter disables admission control (tests only).
 type Admitter interface {
 	Acquire(ctx context.Context, mem judge.MemoryBytes) (release func(), err error)
 }
@@ -50,6 +46,7 @@ func (r *Runner) admit(ctx context.Context, mem judge.MemoryBytes) (func(), erro
 	return r.admitter.Acquire(ctx, mem)
 }
 
+// Runner compiles and judges submissions.
 type Runner struct {
 	registry   *lang.Registry
 	sandbox    sandbox.Sandbox
@@ -61,6 +58,7 @@ type Runner struct {
 	log        *slog.Logger
 }
 
+// NewRunner returns a Runner. A non-positive opts.MaxParallel is treated as 1.
 func NewRunner(
 	registry *lang.Registry,
 	sb sandbox.Sandbox,
@@ -81,8 +79,8 @@ func NewRunner(
 	}
 }
 
-// sandboxEnv is the entire environment a submission sees. Nothing is inherited: the
-// worker's variables can hold credentials and internal addresses.
+// sandboxEnv is the entire environment a submission sees. Nothing is inherited
+// because the worker's environment may hold credentials.
 var sandboxEnv = []string{
 	"PATH=/usr/local/bin:/usr/bin:/bin",
 	"HOME=/tmp",
@@ -90,12 +88,12 @@ var sandboxEnv = []string{
 	"LC_ALL=C.UTF-8",
 }
 
+// Run judges sub, bounded by Options.SubmissionLimit. Sandbox failures on a single
+// testcase are reported as system errors rather than returned.
 func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error) {
 	if err := sub.Validate(); err != nil {
 		return judge.SubmissionResult{}, err
 	}
-	// Citron must answer before its client gives up waiting, whatever else is
-	// happening on the machine.
 	if r.opts.SubmissionLimit > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.opts.SubmissionLimit)
@@ -118,7 +116,7 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 
 	result := judge.SubmissionResult{ID: sub.ID, Compile: compiled.Result}
 	if !compiled.Result.Skipped && !compiled.Result.Success {
-		// Compilation failed: every testcase shares the verdict, and none are run.
+		// Testcases are not run; each inherits the compilation error.
 		result.Status = judge.StatusCompilationError
 		result.TestCases = make([]judge.TestCaseResult, len(sub.TestCases))
 		for i, tc := range sub.TestCases {
@@ -168,12 +166,10 @@ func (r *Runner) compile(
 			return judge.CompileResult{}, fmt.Errorf("compile: %w", err)
 		}
 		if len(argv) == 0 {
-			// No compile step: the source itself is the artifact. It still goes
-			// through the cache so artifact lifetime has exactly one owner.
+			// No compile step: the source is the artifact. It still goes through the
+			// cache so the cache alone owns artifact lifetime.
 			return judge.CompileResult{Skipped: true, Success: true}, nil
 		}
-		// Compilers are the most memory-hungry thing citron runs; they reserve
-		// capacity like any other execution.
 		release, err := r.admit(ctx, r.opts.CompileLimits.Memory)
 		if err != nil {
 			return judge.CompileResult{}, fmt.Errorf("compile: %w", err)
@@ -226,8 +222,7 @@ func (r *Runner) runTestCases(
 		g.Go(func() error {
 			res, err := r.runOne(gctx, compiled, argv, limits, tc)
 			if err != nil {
-				// A sandbox failure is citron's fault, not the submission's. It
-				// fails this testcase without abandoning the others.
+				// A sandbox failure is a system error for this testcase only.
 				r.log.Error("testcase execution failed",
 					"submission", sub.ID, "testcase", tc.Index, "error", err)
 				res = judge.TestCaseResult{
@@ -268,8 +263,7 @@ func (r *Runner) runOne(
 		return judge.TestCaseResult{}, err
 	}
 
-	// The artifact is copied in above, so it is NOT also bind-mounted: mounting it
-	// would expose the cache's directory layout inside the workspace for no gain.
+	// The artifact is copied, not bind-mounted, to keep the cache layout out of the jail.
 	res, err := r.sandbox.Run(ctx, sandbox.Spec{
 		Dir: ws.Dir, Argv: argv, Stdin: tc.Stdin, Env: sandboxEnv, Limits: limits,
 	})
@@ -294,8 +288,8 @@ func (r *Runner) runOne(
 	return out, nil
 }
 
-// verdict turns what the sandbox observed into a status. Limit violations outrank a
-// wrong answer: a program killed at its memory ceiling has not answered anything.
+// verdict maps a sandbox result to a status. Limit violations take precedence over
+// output comparison.
 func (r *Runner) verdict(res sandbox.Result, tc judge.TestCase) judge.Status {
 	switch {
 	case res.TimedOut:
@@ -316,7 +310,7 @@ func (r *Runner) verdict(res sandbox.Result, tc judge.TestCase) judge.Status {
 		case syscall.SIGABRT:
 			return judge.StatusRuntimeErrorAborted
 		case syscall.SIGXCPU, syscall.SIGKILL:
-			// The kernel kills on CPU overrun; the sandbox kills on wall clock.
+			// SIGXCPU: kernel CPU limit. SIGKILL: sandbox wall-clock limit.
 			return judge.StatusTimeLimitExceeded
 		default:
 			return judge.StatusRuntimeErrorOther

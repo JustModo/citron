@@ -1,10 +1,10 @@
-.git
-.gitignore
-bin
-dist
-docs
-tests
-*_test.go
-README.md
-DESIGN.md
-compose.yaml
+# Allowlist: the image is built from these paths only.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!configs/
+!entrypoint.sh
+
+**/*_test.go

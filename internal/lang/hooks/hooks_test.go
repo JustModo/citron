@@ -11,9 +11,6 @@ import (
 	"github.com/JustModo/citron/internal/lang/hooks"
 )
 
-// This package is where the shipped configuration meets the real hooks, so the tests
-// that need both live here.
-
 var manifestPath = filepath.Join("..", "..", "..", "configs", "languages.toml")
 
 func baseLimits() judge.Limits {
@@ -33,7 +30,7 @@ func shipped(t *testing.T) *lang.Registry {
 	return r
 }
 
-// Existing clients submit these ids; they must keep resolving.
+// Language ids are part of the API and must stay stable.
 func TestShippedRegistry(t *testing.T) {
 	r := shipped(t)
 	for id, name := range map[judge.LanguageID]string{50: "c", 54: "cpp", 62: "java", 71: "python"} {
@@ -51,9 +48,7 @@ func TestShippedRegistry(t *testing.T) {
 	}
 }
 
-// Every hook a manifest names must be registered in All. Loading with no hooks at
-// all must fail loudly, which is what makes a forgotten entry a boot error rather
-// than a language that quietly misbehaves.
+// Every hook a manifest names must be in All; loading without them must fail.
 func TestManifestHooksAreRegistered(t *testing.T) {
 	if _, err := lang.LoadRegistry(manifestPath, nil); err == nil {
 		t.Fatal("loading without hooks should fail; a manifest names one")
@@ -90,7 +85,6 @@ func TestShippedArgvRendering(t *testing.T) {
 			runHas:     []string{"python3", "main.py"},
 		},
 		{
-			// The Java hook renames the file after the public class.
 			language: "java", source: "public class Solution { }",
 			wantSource: "Solution.java", wantBinary: "Solution",
 			compileHas: []string{"javac", "Solution.java"},
@@ -143,8 +137,7 @@ func TestShippedArgvRendering(t *testing.T) {
 	}
 }
 
-// The JVM's non-heap overhead has to live somewhere. Without headroom above the
-// heap, a "256 MB" Java submission OOMs on memory it never asked for.
+// The JVM needs memory above its heap for non-heap overhead.
 func TestJavaGetsHeadroomAboveItsHeap(t *testing.T) {
 	java, err := shipped(t).ByName("java")
 	if err != nil {
@@ -173,7 +166,7 @@ func TestJavaGetsHeadroomAboveItsHeap(t *testing.T) {
 	if !strings.Contains(joined, "-Xmx256m") {
 		t.Errorf("heap should be the promised 256m, not the padded ceiling: %q", joined)
 	}
-	// A JVM that spawns a GC thread per core will not fit in a small pid budget.
+	// Per-core GC threads would exceed a small pid budget.
 	if !strings.Contains(joined, "UseSerialGC") || !strings.Contains(joined, "ActiveProcessorCount=1") {
 		t.Errorf("java run flags should keep the thread count down: %q", joined)
 	}

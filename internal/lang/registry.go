@@ -12,16 +12,18 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
+// ErrUnknownLanguage is returned when a lookup matches no language.
 var ErrUnknownLanguage = errors.New("unknown language")
 
+// Registry holds the loaded languages, indexed by id and name.
 type Registry struct {
 	byID   map[judge.LanguageID]*Language
 	byName map[string]*Language
 	order  []*Language
 }
 
-// LoadRegistry reads a languages.toml file. Hooks supply the Go implementations for
-// manifests that name one; pass hooks.All() unless a test needs something narrower.
+// LoadRegistry loads and validates a languages.toml file. hooks must contain every
+// hook a manifest names.
 func LoadRegistry(path string, hooks Hooks) (*Registry, error) {
 	manifests, err := loadFile(path)
 	if err != nil {
@@ -63,6 +65,7 @@ func newRegistry(manifests []Manifest, hooks Hooks) (*Registry, error) {
 	return r, nil
 }
 
+// ByID returns the language with the given id.
 func (r *Registry) ByID(id judge.LanguageID) (*Language, error) {
 	if l, ok := r.byID[id]; ok {
 		return l, nil
@@ -70,6 +73,7 @@ func (r *Registry) ByID(id judge.LanguageID) (*Language, error) {
 	return nil, fmt.Errorf("%w: id %d", ErrUnknownLanguage, id)
 }
 
+// ByName returns the language with the given name, matched case-insensitively.
 func (r *Registry) ByName(name string) (*Language, error) {
 	if l, ok := r.byName[strings.ToLower(name)]; ok {
 		return l, nil
@@ -77,9 +81,10 @@ func (r *Registry) ByName(name string) (*Language, error) {
 	return nil, fmt.Errorf("%w: %q", ErrUnknownLanguage, name)
 }
 
+// All returns every language ordered by id.
 func (r *Registry) All() []*Language { return r.order }
 
-// Toolchain is what a language's probe reported.
+// Toolchain is the result of probing one language's toolchain.
 type Toolchain struct {
 	Language  string
 	Available bool
@@ -87,9 +92,8 @@ type Toolchain struct {
 	Err       error
 }
 
-// Probe runs each language's version command. Accepting submissions for a language
-// whose compiler is missing produces confusing failures at execution time, so the
-// composition root calls this at startup and refuses to start when required.
+// Probe runs each language's version command. A language with no probe command is
+// reported available with version "unknown".
 func (r *Registry) Probe(ctx context.Context) []Toolchain {
 	out := make([]Toolchain, 0, len(r.order))
 	for _, l := range r.order {

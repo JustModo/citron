@@ -23,7 +23,7 @@ func TestWorkspaceIsRemovedOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Write("out.txt", []byte("data"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(w.Dir, "out.txt"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
@@ -37,7 +37,6 @@ func TestWorkspaceIsRemovedOnClose(t *testing.T) {
 	}
 }
 
-// Two testcases of the same submission must not share a directory.
 func TestWorkspacesAreIsolated(t *testing.T) {
 	m := newManager(t)
 	a, err := m.New("tc")
@@ -54,10 +53,10 @@ func TestWorkspacesAreIsolated(t *testing.T) {
 	if a.Dir == b.Dir {
 		t.Fatal("two workspaces share a directory")
 	}
-	if err := a.Write("secret", []byte("from A"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(a.Dir, "secret"), []byte("from A"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(b.Path("secret")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(b.Dir, "secret")); !os.IsNotExist(err) {
 		t.Error("a file written by one testcase is visible to another")
 	}
 }
@@ -112,21 +111,6 @@ func TestSweepClearsOrphans(t *testing.T) {
 	}
 }
 
-func TestWriteRejectsPaths(t *testing.T) {
-	m := newManager(t)
-	w, err := m.New("tc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-	for _, name := range []string{"../escape", "sub/file", `back\slash`} {
-		if err := w.Write(name, []byte("x"), 0o644); err == nil {
-			t.Errorf("Write(%q) should be rejected", name)
-		}
-	}
-}
-
-// A caller-supplied prefix must not steer the directory out of the root.
 func TestPrefixCannotEscapeRoot(t *testing.T) {
 	m := newManager(t)
 	w, err := m.New("../../etc/passwd")

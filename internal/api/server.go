@@ -1,8 +1,3 @@
-// Package api exposes citron over HTTP.
-//
-// Handlers stay thin on purpose: parse, validate, map to a domain request, call the
-// application, map the result back. Nothing here compiles code, spawns a process or
-// touches the filesystem.
 package api
 
 import (
@@ -15,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/JustModo/citron/internal/judge"
@@ -23,16 +17,17 @@ import (
 	"github.com/JustModo/citron/internal/sched"
 )
 
-// Submitter runs a submission. The scheduler implements it.
+// Submitter runs a submission.
 type Submitter interface {
 	Submit(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error)
 }
 
-// Health reports whether citron can currently accept work.
+// Health reports whether the service can currently accept work, and why not.
 type Health interface {
 	Ready() (bool, string)
 }
 
+// Server is the HTTP API.
 type Server struct {
 	submitter Submitter
 	registry  *lang.Registry
@@ -44,6 +39,7 @@ type Server struct {
 	mux *http.ServeMux
 }
 
+// Options configures a Server.
 type Options struct {
 	Submitter Submitter
 	Registry  *lang.Registry
@@ -55,6 +51,7 @@ type Options struct {
 	MetricsHandler http.Handler
 }
 
+// NewServer returns a Server with its routes registered.
 func NewServer(opts Options) *Server {
 	s := &Server{
 		submitter: opts.Submitter,
@@ -76,11 +73,10 @@ func NewServer(opts Options) *Server {
 	return s
 }
 
+// Handler returns the server's routes wrapped in panic recovery, auth and logging.
 func (s *Server) Handler() http.Handler {
 	return s.recoverPanic(s.authenticate(s.logRequest(s.mux)))
 }
-
-// --- middleware ---
 
 func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,8 +90,8 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
-// authenticate guards everything except liveness, which a container runtime must be
-// able to reach without credentials.
+// authenticate requires the token on every route except /health, which liveness
+// probes reach without credentials.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.authToken == "" || r.URL.Path == "/health" {
@@ -116,7 +112,7 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
-			return // liveness probes would drown everything else
+			return // too frequent to be worth logging
 		}
 		s.log.Info("request",
 			"method", r.Method, "path", r.URL.Path,
@@ -134,12 +130,10 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// --- handlers ---
-
 func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
 	c := codec{base64: r.URL.Query().Get("base64_encoded") == "true"}
 
-	// Bounded read: an oversized body must be refused, not buffered.
+	// Refuse oversized bodies instead of buffering them.
 	maxBody := s.limits.MaxSourceBytes + s.limits.MaxTotalInput + s.limits.MaxTotalOutput + (1 << 20)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
@@ -152,10 +146,6 @@ func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{"malformed JSON: " + err.Error()})
 		return
 	}
-
-	// A request without a testcases array is the legacy single-testcase form. That
-	// is the only difference between the two surfaces; everything below is shared.
-	compat := req.Testcases == nil
 
 	sub, err := s.buildSubmission(req, c)
 	if err != nil {
@@ -177,10 +167,6 @@ func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if compat {
-		writeJSON(w, http.StatusCreated, toLegacy(result, c))
-		return
-	}
 	writeJSON(w, http.StatusCreated, toNative(result, c))
 }
 
@@ -193,8 +179,6 @@ func (s *Server) writeSubmitError(w http.ResponseWriter, err error) {
 	case errors.Is(err, sched.ErrTooLarge):
 		writeJSON(w, http.StatusUnprocessableEntity, errorResponse{err.Error()})
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		// Citron ran out of its own time budget. Say so rather than leaving the
-		// client to guess from a dropped connection.
 		writeJSON(w, http.StatusGatewayTimeout, errorResponse{"submission exceeded citron's time budget"})
 	default:
 		s.log.Error("submission failed", "error", err)
@@ -220,9 +204,6 @@ func (s *Server) buildSubmission(req submissionRequest, c codec) (judge.Submissi
 	}
 
 	raw := req.Testcases
-	if raw == nil {
-		raw = []testcaseRequest{{Stdin: req.Stdin, ExpectedOutput: req.ExpectedOutput}}
-	}
 	if len(raw) == 0 {
 		return judge.Submission{}, invalid("at least one testcase is required")
 	}
@@ -275,11 +256,11 @@ func (s *Server) handleLanguages(w http.ResponseWriter, _ *http.Request) {
 	type languageDTO struct {
 		ID    int    `json:"id"`
 		Name  string `json:"name"`
-		Name2 string `json:"label"`
+		Label string `json:"label"`
 	}
 	out := make([]languageDTO, 0, len(s.registry.All()))
 	for _, l := range s.registry.All() {
-		out = append(out, languageDTO{ID: int(l.ID()), Name: l.Name(), Name2: l.Label()})
+		out = append(out, languageDTO{ID: int(l.ID()), Name: l.Name(), Label: l.Label()})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -288,8 +269,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleReady answers whether work can be accepted right now. A dependency being
-// unavailable makes this false; it does not take the process down.
+// handleReady reports readiness; unlike /health it can fail while the process is up.
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	ready, reason := true, ""
 	if s.health != nil {
@@ -302,12 +282,10 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
-// --- mapping ---
-
 func toNative(res judge.SubmissionResult, c codec) submissionResponse {
 	out := submissionResponse{
 		ID:         string(res.ID),
-		Status:     statusDTO{toLegacyStatus(res.Status).id, res.Status.String()},
+		Status:     toStatusDTO(res.Status),
 		WallTimeMS: res.WallTime.Milliseconds(),
 		Compile: compileDTO{
 			Skipped:    res.Compile.Skipped,
@@ -321,7 +299,7 @@ func toNative(res judge.SubmissionResult, c codec) submissionResponse {
 	for i, tc := range res.TestCases {
 		out.Testcases[i] = testcaseResultDTO{
 			Index:           int(tc.Index),
-			Status:          statusDTO{toLegacyStatus(tc.Status).id, tc.Status.String()},
+			Status:          toStatusDTO(tc.Status),
 			Stdout:          c.encode(tc.Stdout),
 			Stderr:          c.encode(tc.Stderr),
 			ExitCode:        tc.ExitCode,
@@ -338,40 +316,11 @@ func toNative(res judge.SubmissionResult, c codec) submissionResponse {
 	return out
 }
 
-// toLegacy flattens a submission down to the legacy single-testcase response.
-func toLegacy(res judge.SubmissionResult, c codec) legacyResponse {
-	status := toLegacyStatus(res.Status)
-	out := legacyResponse{
-		Token:  string(res.ID),
-		Status: statusDTO{status.id, status.desc},
-	}
-	if len(res.Compile.Output) > 0 {
-		out.CompileOutput = nilIfEmpty(c.encode(res.Compile.Output))
-	}
-	if len(res.TestCases) > 0 {
-		tc := res.TestCases[0]
-		out.Stdout = nilIfEmpty(c.encode(tc.Stdout))
-		out.Stderr = nilIfEmpty(c.encode(tc.Stderr))
-		exit := tc.ExitCode
-		out.ExitCode = &exit
-		t := strconv.FormatFloat(tc.CPUTime.Seconds(), 'f', 3, 64)
-		out.Time = &t
-		mem := int64(tc.Memory) >> 10
-		out.Memory = &mem
-		if tc.Message != "" {
-			out.Message = nilIfEmpty(tc.Message)
-		}
-	}
-	return out
-}
-
 func writeJSON(w http.ResponseWriter, code int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		// The status line is already written; there is nothing useful left to do.
-		_ = err
-	}
+	// Headers are already sent, so an encode error cannot be reported.
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func newID() string {

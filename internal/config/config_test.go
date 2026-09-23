@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// The shipped config must load and validate. This catches a config/struct drift
-// that no unit test on Default() would notice.
+// Catches drift between configs/citron.conf and the Config struct.
 func TestShippedConfigLoads(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "configs", "citron.conf"))
 	if err != nil {
@@ -78,7 +77,6 @@ func TestValidate(t *testing.T) {
 			c.Sandbox.AllowUnsafeLocal = true
 		}, ""},
 		{"unknown sandbox driver", func(c *Config) { c.Sandbox.Driver = "docker" }, "sandbox.driver"},
-		{"redis driver needs a url", func(c *Config) { c.Queue.Driver = "redis" }, "redis_url"},
 		{"memory budget below one execution deadlocks admission", func(c *Config) {
 			c.Scheduler.MemoryBudgetMB = 128
 			c.Limits.Execution.MemoryMB = 256
@@ -88,7 +86,6 @@ func TestValidate(t *testing.T) {
 			c.Server.WriteTimeoutSec = 60
 		}, "max_total_wall_time_seconds"},
 		{"zero cpu limit", func(c *Config) { c.Limits.Execution.CPUTimeSec = 0 }, "limits.execution"},
-		{"zero attempts", func(c *Config) { c.Jobs.MaxAttempts = 0 }, "max_attempts"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
