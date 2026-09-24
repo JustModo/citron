@@ -16,7 +16,6 @@ import (
 
 	"github.com/JustModo/citron/internal/judge"
 	"github.com/JustModo/citron/internal/lang"
-	"github.com/JustModo/citron/internal/lang/hooks"
 	"github.com/JustModo/citron/internal/sched"
 )
 
@@ -46,7 +45,7 @@ func (f *fakeSubmitter) Submit(_ context.Context, sub judge.Submission) (judge.S
 
 func newTestServer(t *testing.T, sub *fakeSubmitter) http.Handler {
 	t.Helper()
-	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "languages"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +180,7 @@ func TestValidation(t *testing.T) {
 }
 
 func TestTooManyTestcasesIsRejected(t *testing.T) {
-	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "languages"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +262,9 @@ func TestLanguagesEndpoint(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := map[int]string{50: "c", 54: "cpp", 62: "java", 71: "python"}
+	want := map[int]string{
+		50: "c", 54: "cpp", 60: "go", 62: "java", 63: "javascript", 71: "python", 73: "rust", 74: "typescript",
+	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d languages, want %d", len(got), len(want))
 	}
@@ -291,7 +292,7 @@ type notReady struct{}
 func (notReady) Ready() (bool, string) { return false, "queue unreachable" }
 
 func TestReadyDegradesWithoutKillingLiveness(t *testing.T) {
-	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
+	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "languages"))
 	h := NewServer(Options{
 		Submitter: &fakeSubmitter{}, Registry: registry, Health: notReady{},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -311,7 +312,7 @@ func TestReadyDegradesWithoutKillingLiveness(t *testing.T) {
 }
 
 func TestAuthToken(t *testing.T) {
-	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
+	registry, _ := lang.LoadRegistry(filepath.Join("..", "..", "languages"))
 	h := NewServer(Options{
 		Submitter: &fakeSubmitter{}, Registry: registry, AuthToken: "s3cret",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

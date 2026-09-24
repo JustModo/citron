@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     && /out/citron -version
 
 
-FROM debian:trixie-slim AS runtime
+FROM debian:trixie-slim AS base
 
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="citron" \
@@ -38,16 +38,15 @@ LABEL org.opencontainers.image.title="citron" \
       org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ python3 openjdk-21-jdk-headless \
-        libprotobuf-dev libnl-route-3-dev \
-        procps \
+        libprotobuf-dev libnl-route-3-dev procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nsjail /src/nsjail/nsjail /usr/local/bin/nsjail
 COPY --from=build /out/citron /usr/local/bin/citron
+COPY scripts/citron-add-language /usr/local/bin/
 COPY configs/ /opt/citron/configs/
 COPY entrypoint.sh /opt/citron/
-RUN chmod +x /opt/citron/entrypoint.sh
+RUN chmod +x /usr/local/bin/citron-add-language /opt/citron/entrypoint.sh
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin citron \
     && mkdir -p /box /box/cache && chown -R citron:citron /box
@@ -56,3 +55,10 @@ WORKDIR /opt/citron
 EXPOSE 2358
 ENTRYPOINT ["/opt/citron/entrypoint.sh"]
 CMD ["citron", "-config", "/opt/citron/configs/citron.conf"]
+
+
+FROM base AS full
+
+ARG LANGUAGES="c cpp java python"
+COPY languages/ /tmp/languages/
+RUN cd /tmp/languages && citron-add-language $LANGUAGES && rm -rf /tmp/languages

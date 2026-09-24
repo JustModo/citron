@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 	"github.com/JustModo/citron/internal/judge"
 )
 
-// Manifest is one [[language]] entry in languages.toml. Compile and Run are
-// text/template argv whose fields are those of renderCtx.
+// Manifest is a pack's language.toml. Compile and Run are text/template argv whose
+// fields are those of renderCtx.
 type Manifest struct {
 	ID     int    `toml:"id"`
 	Name   string `toml:"name"`
@@ -26,13 +27,16 @@ type Manifest struct {
 	Run     []string `toml:"run"`
 	Probe   []string `toml:"probe"`
 
-	// Hook is a key into Hooks; empty for none.
-	Hook string `toml:"hook"`
+	// Mounts are extra absolute paths the language needs read-only in the jail.
+	Mounts []string `toml:"mounts"`
+	// Env is extra KEY=VALUE environment for both compile and run.
+	Env []string `toml:"env"`
 
-	Limits ManifestLimits `toml:"limits"`
+	Limits        ManifestLimits `toml:"limits"`
+	CompileLimits ManifestLimits `toml:"compile_limits"`
 }
 
-// ManifestLimits adjusts the configured execution limits for one language, for
+// ManifestLimits adjusts configured limits for one language, for
 // runtimes whose fixed overhead would otherwise exhaust the baseline. Zero fields
 // leave the base limit unchanged.
 type ManifestLimits struct {
@@ -66,11 +70,12 @@ func (ml ManifestLimits) Apply(l judge.Limits) judge.Limits {
 }
 
 // renderCtx holds every value a manifest template may reference. None of it comes
-// from submitted source; filenames are from the manifest or a sanitizing hook.
+// from submitted source.
 type renderCtx struct {
 	Source  string
 	Binary  string
 	Dir     string
+	Pack    string
 	StackKB int64
 	HeapMB  int64
 	MemMB   int64
@@ -79,7 +84,7 @@ type renderCtx struct {
 // Language is a validated manifest with its argv templates parsed.
 type Language struct {
 	manifest Manifest
-	hook     Hook
+	pack     string
 	compile  []*template.Template
 	run      []*template.Template
 }
@@ -96,48 +101,46 @@ func (l *Language) Label() string { return l.manifest.Label }
 // ProbeCommand returns the argv that prints the toolchain version, or nil.
 func (l *Language) ProbeCommand() []string { return l.manifest.Probe }
 
-// Compiled reports whether the language produces an artifact that testcases share.
-// It checks for a binary, not a compile command, because interpreted languages may
-// compile only as a syntax check.
-func (l *Language) Compiled() bool { return l.manifest.Binary != "" }
+// Source returns the filename the submitted source is written to.
+func (l *Language) Source() string { return l.manifest.Source }
 
-// Limits returns base adjusted for this language.
+// Mounts returns the extra read-only paths the language needs in the jail.
+func (l *Language) Mounts() []string { return l.manifest.Mounts }
+
+// Env returns the language's extra environment.
+func (l *Language) Env() []string { return l.manifest.Env }
+
+// Limits returns the execution limits base adjusted for this language.
 func (l *Language) Limits(base judge.Limits) judge.Limits { return l.manifest.Limits.Apply(base) }
 
-// Files returns the source filename and artifact name for a submission, derived by
-// the language's hook when it has one.
-func (l *Language) Files(source []byte) (src, binary string) {
-	src, binary = l.manifest.Source, l.manifest.Binary
-	if l.hook != nil {
-		src, binary = l.hook.Files(source, l.manifest)
-	}
-	return src, binary
+// CompileLimits returns the compile limits base adjusted for this language.
+func (l *Language) CompileLimits(base judge.Limits) judge.Limits {
+	return l.manifest.CompileLimits.Apply(base)
 }
 
 // CompileArgv renders the compile command. It returns nil when the language has no
 // compile step.
-func (l *Language) CompileArgv(c Context) ([]string, error) { return render(l.compile, c) }
+func (l *Language) CompileArgv(c Context) ([]string, error) { return l.render(l.compile, c) }
 
 // RunArgv renders the run command.
-func (l *Language) RunArgv(c Context) ([]string, error) { return render(l.run, c) }
+func (l *Language) RunArgv(c Context) ([]string, error) { return l.render(l.run, c) }
 
-// Context supplies the values needed to render argv.
+// Context supplies the per-execution values needed to render argv.
 type Context struct {
-	Source  string
-	Binary  string
 	Dir     string
 	Limits  judge.Limits
 	BaseMem judge.MemoryBytes // memory before the language's extra headroom; sizes HeapMB
 }
 
-func render(tmpls []*template.Template, c Context) ([]string, error) {
+func (l *Language) render(tmpls []*template.Template, c Context) ([]string, error) {
 	if len(tmpls) == 0 {
 		return nil, nil
 	}
 	rc := renderCtx{
-		Source:  c.Source,
-		Binary:  c.Binary,
+		Source:  l.manifest.Source,
+		Binary:  l.manifest.Binary,
 		Dir:     c.Dir,
+		Pack:    l.pack,
 		StackKB: int64(c.Limits.Stack) >> 10,
 		HeapMB:  c.BaseMem.MB(),
 		MemMB:   c.Limits.Memory.MB(),
@@ -172,7 +175,17 @@ func compileTemplates(name string, argv []string) ([]*template.Template, error) 
 // ErrInvalidManifest is wrapped by every manifest validation error.
 var ErrInvalidManifest = errors.New("invalid language manifest")
 
-func (m Manifest) validate(hooks Hooks) error {
+func (m Manifest) validate() error {
+	for _, e := range m.Env {
+		if k, _, ok := strings.Cut(e, "="); !ok || k == "" {
+			return fmt.Errorf("%w: %q env %q is not KEY=VALUE", ErrInvalidManifest, m.Name, e)
+		}
+	}
+	for _, p := range m.Mounts {
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("%w: %q mount %q is not absolute", ErrInvalidManifest, m.Name, p)
+		}
+	}
 	switch {
 	case m.ID <= 0:
 		return fmt.Errorf("%w: %q has no id", ErrInvalidManifest, m.Name)
@@ -182,39 +195,22 @@ func (m Manifest) validate(hooks Hooks) error {
 		return fmt.Errorf("%w: %q has no source filename", ErrInvalidManifest, m.Name)
 	case len(m.Run) == 0:
 		return fmt.Errorf("%w: %q has no run command", ErrInvalidManifest, m.Name)
-	case m.Hook != "" && hooks[m.Hook] == nil:
-		return fmt.Errorf("%w: %q names unknown hook %q", ErrInvalidManifest, m.Name, m.Hook)
 	}
 	return nil
 }
 
-type manifestFile struct {
-	Language []Manifest `toml:"language"`
-}
-
-func parseManifests(data []byte) ([]Manifest, error) {
-	var f manifestFile
+func parseManifest(data []byte) (Manifest, error) {
+	var m Manifest
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&f); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		if sErr, ok := errors.AsType[*toml.StrictMissingError](err); ok {
-			return nil, fmt.Errorf("languages: unknown key(s):\n%s", sErr.String())
+			return Manifest{}, fmt.Errorf("unknown key(s):\n%s", sErr.String())
 		}
 		if dErr, ok := errors.AsType[*toml.DecodeError](err); ok {
-			return nil, fmt.Errorf("languages:\n%s", dErr.String())
+			return Manifest{}, fmt.Errorf("\n%s", dErr.String())
 		}
-		return nil, fmt.Errorf("languages: %w", err)
+		return Manifest{}, err
 	}
-	if len(f.Language) == 0 {
-		return nil, fmt.Errorf("%w: no languages defined", ErrInvalidManifest)
-	}
-	return f.Language, nil
-}
-
-func loadFile(path string) ([]Manifest, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("languages: %w", err)
-	}
-	return parseManifests(data)
+	return m, nil
 }

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,6 +90,23 @@ var sandboxEnv = []string{
 	"LC_ALL=C.UTF-8",
 }
 
+// envFor returns sandboxEnv with the language's variables added. A language variable
+// replaces a base one of the same name, since getenv returns the first match.
+func envFor(language *lang.Language) []string {
+	extra := language.Env()
+	if len(extra) == 0 {
+		return sandboxEnv
+	}
+	env := make([]string, 0, len(sandboxEnv)+len(extra))
+	for _, kv := range sandboxEnv {
+		key, _, _ := strings.Cut(kv, "=")
+		if !slices.ContainsFunc(extra, func(e string) bool { return strings.HasPrefix(e, key+"=") }) {
+			env = append(env, kv)
+		}
+	}
+	return append(env, extra...)
+}
+
 // Run judges sub, bounded by Options.SubmissionLimit. Sandbox failures on a single
 // testcase are reported as system errors rather than returned.
 func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.SubmissionResult, error) {
@@ -107,9 +126,7 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 	}
 
 	limits := language.Limits(sub.Limits)
-	source, binary := language.Files(sub.Source)
-
-	compiled, err := r.compile(ctx, language, sub, source, binary, limits)
+	compiled, err := r.compile(ctx, language, sub)
 	if err != nil {
 		return judge.SubmissionResult{}, err
 	}
@@ -129,7 +146,7 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 		return result, nil
 	}
 
-	results, err := r.runTestCases(ctx, language, sub, compiled, source, binary, limits)
+	results, err := r.runTestCases(ctx, language, sub, compiled, limits)
 	if err != nil {
 		return judge.SubmissionResult{}, err
 	}
@@ -150,19 +167,17 @@ func (r *Runner) compile(
 	ctx context.Context,
 	language *lang.Language,
 	sub judge.Submission,
-	source, binary string,
-	limits judge.Limits,
 ) (Entry, error) {
+	limits := language.CompileLimits(r.opts.CompileLimits)
 	argv, err := language.CompileArgv(lang.Context{
-		Source: source, Binary: binary, Dir: r.workspaces.Root(),
-		Limits: r.opts.CompileLimits, BaseMem: sub.Limits.Memory,
+		Dir: r.workspaces.Root(), Limits: limits, BaseMem: sub.Limits.Memory,
 	})
 	if err != nil {
 		return Entry{}, err
 	}
 	key := Key(sub.Language, sub.Source, argv)
 	return r.cache.Build(key, func(dir string) (judge.CompileResult, error) {
-		if err := os.WriteFile(filepath.Join(dir, source), sub.Source, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, language.Source()), sub.Source, 0o644); err != nil {
 			return judge.CompileResult{}, fmt.Errorf("compile: %w", err)
 		}
 		if len(argv) == 0 {
@@ -170,7 +185,7 @@ func (r *Runner) compile(
 			// cache so the cache alone owns artifact lifetime.
 			return judge.CompileResult{Skipped: true, Success: true}, nil
 		}
-		release, err := r.admit(ctx, r.opts.CompileLimits.Memory)
+		release, err := r.admit(ctx, limits.Memory)
 		if err != nil {
 			return judge.CompileResult{}, fmt.Errorf("compile: %w", err)
 		}
@@ -178,7 +193,8 @@ func (r *Runner) compile(
 
 		started := time.Now()
 		res, err := r.sandbox.Run(ctx, sandbox.Spec{
-			Dir: dir, Argv: argv, Env: sandboxEnv, Limits: r.opts.CompileLimits,
+			Dir: dir, ReadOnly: language.Mounts(), Argv: argv, Env: envFor(language),
+			Limits: limits,
 		})
 		if err != nil {
 			return judge.CompileResult{}, fmt.Errorf("compile: %w", err)
@@ -203,12 +219,10 @@ func (r *Runner) runTestCases(
 	language *lang.Language,
 	sub judge.Submission,
 	compiled Entry,
-	source, binary string,
 	limits judge.Limits,
 ) ([]judge.TestCaseResult, error) {
 	argv, err := language.RunArgv(lang.Context{
-		Source: source, Binary: binary, Dir: r.workspaces.Root(),
-		Limits: limits, BaseMem: sub.Limits.Memory,
+		Dir: r.workspaces.Root(), Limits: limits, BaseMem: sub.Limits.Memory,
 	})
 	if err != nil {
 		return nil, err
@@ -220,7 +234,7 @@ func (r *Runner) runTestCases(
 
 	for i, tc := range sub.TestCases {
 		g.Go(func() error {
-			res, err := r.runOne(gctx, compiled, argv, limits, tc)
+			res, err := r.runOne(gctx, language, compiled, argv, limits, tc)
 			if err != nil {
 				// A sandbox failure is a system error for this testcase only.
 				r.log.Error("testcase execution failed",
@@ -242,6 +256,7 @@ func (r *Runner) runTestCases(
 
 func (r *Runner) runOne(
 	ctx context.Context,
+	language *lang.Language,
 	compiled Entry,
 	argv []string,
 	limits judge.Limits,
@@ -265,7 +280,8 @@ func (r *Runner) runOne(
 
 	// The artifact is copied, not bind-mounted, to keep the cache layout out of the jail.
 	res, err := r.sandbox.Run(ctx, sandbox.Spec{
-		Dir: ws.Dir, Argv: argv, Stdin: tc.Stdin, Env: sandboxEnv, Limits: limits,
+		Dir: ws.Dir, ReadOnly: language.Mounts(), Argv: argv, Stdin: tc.Stdin, Env: envFor(language),
+		Limits: limits,
 	})
 	if err != nil {
 		return judge.TestCaseResult{}, err

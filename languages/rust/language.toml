@@ -1,0 +1,8 @@
+id = 73
+name = "rust"
+label = "Rust"
+source = "main.rs"
+binary = "main"
+compile = ["rustc", "-O", "--edition", "2021", "-o", "{{.Binary}}", "{{.Source}}"]
+run = ["./{{.Binary}}"]
+probe = ["rustc", "--version"]

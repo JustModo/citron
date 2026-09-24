@@ -35,8 +35,9 @@ The container needs `cap_add: SYS_ADMIN`, `apparmor=unconfined` and
 `systempaths=unconfined` for nsjail to create its namespaces. It does not need
 `privileged` or the Docker socket.
 
-For development without nsjail, set `sandbox.driver = "local"` and
-`sandbox.allow_unsafe_local = true`, then run `make build && ./bin/citron`. The local
+For development without nsjail, set `sandbox.driver = "local"`,
+`sandbox.allow_unsafe_local = true` and `languages.path = "languages"`, then run
+`make build && ./bin/citron`. The local
 driver provides no isolation.
 
 ## Scaling
@@ -44,26 +45,27 @@ driver provides no isolation.
 Replicas share no state; run more of them behind a least-connections load balancer.
 [examples/](examples/) covers Docker Compose, Swarm, Kubernetes and ECS.
 
-## Adding a language
+## Languages
 
-Add a block to [configs/languages.toml](configs/languages.toml) and install the
-toolchain in the image. No code:
+Each language is a pack under [languages/](languages/): a `language.toml` with its
+compile and run commands, plus the apt packages it needs. Behaviour a command cannot
+express goes in a script inside the pack, which runs in the sandbox like a compiler;
+see [languages/java](languages/java/).
 
 ```toml
-[[language]]
-id = 60
-name = "go"
-label = "Go"
-source = "main.go"
-binary = "main"
-compile = ["go", "build", "-o", "{{.Binary}}", "{{.Source}}"]
-run = ["./{{.Binary}}"]
-probe = ["go", "version"]
+id = 71
+name = "python"
+label = "Python 3"
+source = "main.py"
+run = ["python3", "{{.Source}}"]
+probe = ["python3", "-VV"]
 ```
 
-A language needing behaviour a template cannot express — Java must name its file after
-the public class — sets `hook` and implements it in its own package under
-[internal/lang/hooks/](internal/lang/hooks/).
+The image installs the packs named in the `LANGUAGES` build argument. The default is
+`c cpp java python`; `go`, `rust`, `javascript` and `typescript` are also shipped. To
+add a language, build on the image and install a pack with `citron-add-language`; see
+[examples/custom-language](examples/custom-language/) for the pack format.
+`citron:base` (`docker build --target base`) has citron and nsjail but no languages.
 
 Toolchains are probed at startup. With `languages.require_toolchains` set, a missing
 one stops the service from starting.
@@ -108,15 +110,16 @@ value shown there, so a deployment's config only needs what it changes.
 cmd/citron            entry point; wires dependencies
 internal/judge        domain model, standard library only
 internal/config       configuration loading and validation
-internal/lang         language registry and manifests
-internal/lang/hooks   per-language code, one package each
+internal/lang         language pack loading and argv rendering
 internal/sandbox      sandbox interface, nsjail driver, cgroup control
 internal/run          compile-once pipeline and compile cache
 internal/sched        admission control and scheduling
 internal/compare      output comparison
 internal/api          HTTP handlers
 internal/metrics      Prometheus instrumentation
-configs               service config and language definitions
+configs               service configuration
+languages             language packs
+scripts               citron-add-language, installed in the image
 examples              API usage and deployment
 tests                 security and smoke suites, run against a live service
 bench                 load test harness and its deployment profiles

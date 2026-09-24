@@ -1,0 +1,13 @@
+id = 71
+name = "python"
+label = "Python 3"
+source = "main.py"
+# Syntax-checked once per submission, so a syntax error is one compilation error
+# rather than a runtime error per testcase.
+compile = ["python3", "-c", "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=True)", "{{.Source}}"]
+run = ["python3", "{{.Source}}"]
+probe = ["python3", "-VV"]
+
+[limits]
+memory_extra_mb = 32
+wall_multiplier = 1.5

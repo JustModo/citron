@@ -6,5 +6,7 @@
 !internal/
 !configs/
 !entrypoint.sh
+!languages/
+!scripts/
 
 **/*_test.go

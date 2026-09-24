@@ -1,0 +1,23 @@
+id = 74
+name = "typescript"
+label = "TypeScript (Node.js)"
+source = "main.ts"
+binary = "main.js"
+compile = [
+    "tsc",
+    "--target", "es2022",
+    "--module", "commonjs",
+    # Skips checking Node's own type definitions; submitted code is still type-checked.
+    "--skipLibCheck",
+    "--types", "node",
+    "--typeRoots", "/usr/local/lib/node_modules/@types",
+    "{{.Source}}",
+]
+run = ["node", "{{.Binary}}"]
+probe = ["tsc", "--version"]
+# The compiler is a Go program; without this it starts threads per host core.
+env = ["GOMAXPROCS=1"]
+
+[limits]
+memory_extra_mb = 64
+wall_multiplier = 1.5

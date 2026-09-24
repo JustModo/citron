@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -22,23 +24,55 @@ type Registry struct {
 	order  []*Language
 }
 
-// LoadRegistry loads and validates a languages.toml file. hooks must contain every
-// hook a manifest names.
-func LoadRegistry(path string, hooks Hooks) (*Registry, error) {
-	manifests, err := loadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return newRegistry(manifests, hooks)
+// ManifestFile is the name of the manifest inside a language pack directory.
+const ManifestFile = "language.toml"
+
+// pack is a parsed manifest and the absolute directory it was loaded from.
+type pack struct {
+	manifest Manifest
+	dir      string
 }
 
-func newRegistry(manifests []Manifest, hooks Hooks) (*Registry, error) {
-	r := &Registry{
-		byID:   make(map[judge.LanguageID]*Language, len(manifests)),
-		byName: make(map[string]*Language, len(manifests)),
+// LoadRegistry loads every language pack under dir, each a subdirectory holding a
+// language.toml.
+func LoadRegistry(dir string) (*Registry, error) {
+	if _, err := os.Stat(dir); err != nil {
+		return nil, fmt.Errorf("languages: %w", err)
 	}
-	for _, m := range manifests {
-		if err := m.validate(hooks); err != nil {
+	paths, err := filepath.Glob(filepath.Join(dir, "*", ManifestFile))
+	if err != nil {
+		return nil, fmt.Errorf("languages: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("%w: no language packs in %s", ErrInvalidManifest, dir)
+	}
+	packs := make([]pack, 0, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("languages: %w", err)
+		}
+		m, err := parseManifest(data)
+		if err != nil {
+			return nil, fmt.Errorf("languages: %s: %w", path, err)
+		}
+		abs, err := filepath.Abs(filepath.Dir(path))
+		if err != nil {
+			return nil, fmt.Errorf("languages: %w", err)
+		}
+		packs = append(packs, pack{manifest: m, dir: abs})
+	}
+	return newRegistry(packs)
+}
+
+func newRegistry(packs []pack) (*Registry, error) {
+	r := &Registry{
+		byID:   make(map[judge.LanguageID]*Language, len(packs)),
+		byName: make(map[string]*Language, len(packs)),
+	}
+	for _, p := range packs {
+		m := p.manifest
+		if err := m.validate(); err != nil {
 			return nil, err
 		}
 		id := judge.LanguageID(m.ID)
@@ -56,7 +90,7 @@ func newRegistry(manifests []Manifest, hooks Hooks) (*Registry, error) {
 		if err != nil {
 			return nil, err
 		}
-		l := &Language{manifest: m, hook: hooks[m.Hook], compile: compile, run: run}
+		l := &Language{manifest: m, pack: p.dir, compile: compile, run: run}
 		r.byID[id] = l
 		r.byName[m.Name] = l
 		r.order = append(r.order, l)

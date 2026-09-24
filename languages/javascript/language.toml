@@ -1,0 +1,11 @@
+id = 63
+name = "javascript"
+label = "JavaScript (Node.js)"
+source = "main.js"
+compile = ["node", "--check", "{{.Source}}"]
+run = ["node", "{{.Source}}"]
+probe = ["node", "--version"]
+
+[limits]
+memory_extra_mb = 64
+wall_multiplier = 1.5

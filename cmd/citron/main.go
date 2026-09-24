@@ -17,7 +17,6 @@ import (
 	"github.com/JustModo/citron/internal/compare"
 	"github.com/JustModo/citron/internal/config"
 	"github.com/JustModo/citron/internal/lang"
-	"github.com/JustModo/citron/internal/lang/hooks"
 	"github.com/JustModo/citron/internal/metrics"
 	"github.com/JustModo/citron/internal/run"
 	"github.com/JustModo/citron/internal/sandbox"
@@ -57,7 +56,7 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 	}
 	log := newLogger(cfg.Log)
 
-	registry, err := lang.LoadRegistry(resolveRelative(configPath, cfg.Languages.Path), hooks.All())
+	registry, err := lang.LoadRegistry(resolveRelative(configPath, cfg.Languages.Path))
 	if err != nil {
 		return err
 	}
@@ -65,7 +64,7 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 	toolchains := registry.Probe(context.Background())
 	if showLanguages {
 		for _, t := range toolchains {
-			fmt.Printf("%-8s %-9s %s\n", t.Language, availability(t.Available), t.Version)
+			fmt.Printf("%-12s %-9s %s\n", t.Language, availability(t.Available), t.Version)
 		}
 		return nil
 	}

@@ -1,0 +1,44 @@
+#!/bin/sh
+# Usage: citron-add-language DIR...
+#
+# Installs language packs into the image. Each DIR holds a language.toml and,
+# optionally, packages.txt (apt packages, one per line) and install.sh, which runs
+# as root from the installed pack directory after the packages are installed.
+set -eu
+
+dest=/usr/local/share/citron/languages
+
+if [ $# -eq 0 ]; then
+    echo "usage: citron-add-language DIR..." >&2
+    exit 2
+fi
+
+packages=""
+for dir in "$@"; do
+    if [ ! -f "$dir/language.toml" ]; then
+        echo "citron-add-language: $dir has no language.toml" >&2
+        exit 1
+    fi
+    if [ -f "$dir/packages.txt" ]; then
+        packages="$packages $(grep -v '^[[:space:]]*#' "$dir/packages.txt" | tr '\n' ' ')"
+    fi
+done
+
+if [ -n "$(echo $packages)" ]; then
+    apt-get update
+    apt-get install -y --no-install-recommends $packages
+    rm -rf /var/lib/apt/lists/*
+fi
+
+mkdir -p "$dest"
+for dir in "$@"; do
+    name=$(basename "$dir")
+    rm -rf "${dest:?}/$name"
+    cp -R "$dir" "$dest/$name"
+    # install.sh runs from the installed pack, so files it builds stay with the pack.
+    if [ -f "$dest/$name/install.sh" ]; then
+        (cd "$dest/$name" && sh ./install.sh)
+    fi
+    # Pack files are read, and scripts run, inside the jail as an unprivileged uid.
+    chmod -R a+rX "$dest/$name"
+done

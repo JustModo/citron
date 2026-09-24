@@ -23,7 +23,6 @@ services:
 
     volumes:
       - ./configs/citron.conf:/opt/citron/configs/citron.conf:ro
-      - ./configs/languages.toml:/opt/citron/configs/languages.toml:ro
 
     cpus: 2
     mem_limit: 3g

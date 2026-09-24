@@ -104,7 +104,7 @@ type Scheduler struct {
 	MemoryBudgetMB  int64   `toml:"memory_budget_mb"`
 }
 
-// Languages locates the language manifests.
+// Languages locates the language packs.
 type Languages struct {
 	Path string `toml:"path"`
 	// RequireToolchains fails startup when a configured language's toolchain is
@@ -178,7 +178,7 @@ func Default() Config {
 			WorkspaceRoot: "/box",
 			CacheRoot:     "/box/cache",
 			CacheEntries:  256,
-			ReadOnly:      []string{"/usr", "/etc/alternatives", "/etc/java-21-openjdk"},
+			ReadOnly:      []string{"/usr", "/etc/alternatives"},
 			Symlinks:      []string{"/usr/bin:/bin", "/usr/lib:/lib", "/usr/lib64:/lib64", "/usr/sbin:/sbin"},
 			TmpfsMB:       64,
 			UserNamespace: true,
@@ -207,7 +207,7 @@ func Default() Config {
 			ExecutionSlots:           2,
 			MemoryBudgetMB:           1024,
 		},
-		Languages: Languages{Path: "configs/languages.toml", RequireToolchains: true},
+		Languages: Languages{Path: "/usr/local/share/citron/languages", RequireToolchains: true},
 		Log:       Log{Level: "info", Format: "json"},
 	}
 }

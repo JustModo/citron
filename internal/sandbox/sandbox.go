@@ -13,6 +13,8 @@ import (
 type Spec struct {
 	// Dir is the writable workspace and the working directory of the command.
 	Dir string
+	// ReadOnly are extra paths bind-mounted read-only, added to the driver's own.
+	ReadOnly []string
 
 	Argv  []string
 	Stdin []byte

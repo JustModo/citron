@@ -1,0 +1,8 @@
+id = 50
+name = "c"
+label = "C (GCC)"
+source = "main.c"
+binary = "main"
+compile = ["gcc", "-O2", "-std=c17", "-w", "-o", "{{.Binary}}", "{{.Source}}", "-lm"]
+run = ["./{{.Binary}}"]
+probe = ["gcc", "--version"]

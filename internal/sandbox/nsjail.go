@@ -297,6 +297,9 @@ func (n *Nsjail) args(spec Spec) ([]string, error) {
 	for _, p := range n.cfg.ReadOnly {
 		args = append(args, "--bindmount_ro", p)
 	}
+	for _, p := range spec.ReadOnly {
+		args = append(args, "--bindmount_ro", p)
+	}
 	for _, s := range n.cfg.Symlinks {
 		args = append(args, "--symlink", s)
 	}

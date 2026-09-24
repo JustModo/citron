@@ -1,0 +1,30 @@
+id = 62
+name = "java"
+label = "Java (OpenJDK)"
+source = "Main.java"
+# compile.sh writes the class declaring main() to main.args, which `java @main.args`
+# reads as its argument.
+compile = ["{{.Pack}}/compile.sh", "{{.Source}}"]
+# SerialGC and ActiveProcessorCount=1 stop the JVM starting a GC thread per core,
+# each a pid under the process limit. TieredStopAtLevel=1 skips C2, which does not
+# pay off within a second-long run.
+run = [
+    "java",
+    "-XX:+UseSerialGC",
+    "-XX:TieredStopAtLevel=1",
+    "-XX:ActiveProcessorCount=1",
+    "-XX:-UsePerfData",
+    "-Xss{{.StackKB}}k",
+    "-Xmx{{.HeapMB}}m",
+    "@main.args",
+]
+probe = ["java", "-version"]
+mounts = ["/etc/java-21-openjdk"]
+
+[limits]
+# Metaspace, code cache and thread stacks sit outside -Xmx.
+memory_extra_mb = 256
+# JVM threads count against the process limit.
+max_processes = 64
+wall_multiplier = 2.0
+cpu_multiplier = 2.0

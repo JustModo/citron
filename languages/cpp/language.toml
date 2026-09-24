@@ -1,0 +1,8 @@
+id = 54
+name = "cpp"
+label = "C++ (G++)"
+source = "main.cpp"
+binary = "main"
+compile = ["g++", "-O2", "-std=c++20", "-w", "-o", "{{.Binary}}", "{{.Source}}"]
+run = ["./{{.Binary}}"]
+probe = ["g++", "--version"]

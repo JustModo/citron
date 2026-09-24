@@ -1,0 +1,7 @@
+id = 46
+name = "bash"
+label = "Bash"
+source = "main.sh"
+compile = ["bash", "-n", "{{.Source}}"]
+run = ["bash", "{{.Source}}"]
+probe = ["bash", "--version"]

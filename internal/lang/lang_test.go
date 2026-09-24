@@ -1,15 +1,14 @@
 package lang
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/JustModo/citron/internal/judge"
 )
-
-// The shipped languages.toml and real hooks are tested in package hooks, which can
-// import both without a cycle.
 
 func baseLimits() judge.Limits {
 	return judge.Limits{
@@ -19,42 +18,43 @@ func baseLimits() judge.Limits {
 	}
 }
 
-// stubHook names the source after its first line.
-type stubHook struct{}
-
-func (stubHook) Files(source []byte, m Manifest) (string, string) {
-	name, _, _ := strings.Cut(string(source), "\n")
-	if name == "" {
-		return m.Source, m.Binary
+// writePacks creates one pack directory per entry, named by the key.
+func writePacks(t *testing.T, packs map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, manifest := range packs {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, ManifestFile), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return name + ".src", name
+	return dir
 }
 
-func registryFrom(t *testing.T, body string, hooks Hooks) *Registry {
+func load(t *testing.T, packs map[string]string) *Registry {
 	t.Helper()
-	manifests, err := parseManifests([]byte(body))
+	r, err := LoadRegistry(writePacks(t, packs))
 	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	r, err := newRegistry(manifests, hooks)
-	if err != nil {
-		t.Fatalf("register: %v", err)
+		t.Fatal(err)
 	}
 	return r
 }
 
-const twoLanguages = `
-[[language]]
+const compiledPack = `
 id = 1
 name = "compiled"
 label = "Compiled"
 source = "main.x"
 binary = "main"
-compile = ["xc", "-o", "{{.Binary}}", "{{.Source}}"]
+compile = ["{{.Pack}}/build.sh", "-o", "{{.Binary}}", "{{.Source}}"]
 run = ["./{{.Binary}}"]
 probe = ["xc", "--version"]
+mounts = ["/opt/xc"]
+`
 
-[[language]]
+const interpretedPack = `
 id = 2
 name = "interpreted"
 label = "Interpreted"
@@ -63,7 +63,7 @@ run = ["yrun", "{{.Source}}", "--dir", "{{.Dir}}"]
 `
 
 func TestRegistryLookups(t *testing.T) {
-	r := registryFrom(t, twoLanguages, nil)
+	r := load(t, map[string]string{"compiled": compiledPack, "interpreted": interpretedPack})
 
 	l, err := r.ByID(1)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestRegistryLookups(t *testing.T) {
 	if l.Name() != "compiled" || l.Label() != "Compiled" {
 		t.Errorf("id 1 resolved to %q/%q", l.Name(), l.Label())
 	}
-	if _, err := r.ByName("interpreted"); err != nil {
+	if _, err := r.ByName("INTERPRETED"); err != nil {
 		t.Errorf("lookup by name failed: %v", err)
 	}
 	if _, err := r.ByID(9999); err == nil {
@@ -81,92 +81,88 @@ func TestRegistryLookups(t *testing.T) {
 	if _, err := r.ByName("cobol"); err == nil {
 		t.Error("unknown name should error")
 	}
-	if len(r.All()) != 2 {
-		t.Errorf("All() returned %d languages, want 2", len(r.All()))
+	if all := r.All(); len(all) != 2 || all[0].ID() != 1 {
+		t.Errorf("All() = %d languages, want 2 ordered by id", len(all))
 	}
 }
 
 func TestArgvRendering(t *testing.T) {
-	r := registryFrom(t, twoLanguages, nil)
+	dir := writePacks(t, map[string]string{"compiled": compiledPack, "interpreted": interpretedPack})
+	r, err := LoadRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := baseLimits()
+	ctx := Context{Dir: "/box", Limits: base, BaseMem: base.Memory}
 
 	compiled, _ := r.ByName("compiled")
-	src, bin := compiled.Files(nil)
-	ctx := Context{Source: src, Binary: bin, Dir: "/box", Limits: base, BaseMem: base.Memory}
-
 	compile, err := compiled.CompileArgv(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(compile, " "); got != "xc -o main main.x" {
-		t.Errorf("compile argv = %q", got)
+	want := filepath.Join(dir, "compiled") + "/build.sh -o main main.x"
+	if got := strings.Join(compile, " "); got != want {
+		t.Errorf("compile argv = %q, want %q", got, want)
 	}
-	run, err := compiled.RunArgv(ctx)
-	if err != nil {
-		t.Fatal(err)
+	if run, _ := compiled.RunArgv(ctx); strings.Join(run, " ") != "./main" {
+		t.Errorf("run argv = %q", run)
 	}
-	if got := strings.Join(run, " "); got != "./main" {
-		t.Errorf("run argv = %q", got)
+	if m := compiled.Mounts(); len(m) != 1 || m[0] != "/opt/xc" {
+		t.Errorf("mounts = %v", m)
 	}
 
 	interpreted, _ := r.ByName("interpreted")
-	src, bin = interpreted.Files(nil)
-	ctx = Context{Source: src, Binary: bin, Dir: "/box", Limits: base, BaseMem: base.Memory}
 	if argv, _ := interpreted.CompileArgv(ctx); argv != nil {
 		t.Errorf("a language with no compile command should render nil, got %v", argv)
 	}
-	run, err = interpreted.RunArgv(ctx)
+	run, err := interpreted.RunArgv(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(run, " ")
-	if joined != "yrun main.y --dir /box" {
-		t.Errorf("run argv = %q", joined)
-	}
-	if strings.Contains(joined, "{{") {
-		t.Errorf("unrendered template left in argv: %v", run)
+	if got := strings.Join(run, " "); got != "yrun main.y --dir /box" {
+		t.Errorf("run argv = %q", got)
 	}
 }
 
-func TestHookOverridesFilenames(t *testing.T) {
-	body := `
-[[language]]
-id = 3
-name = "hooked"
-source = "default.src"
-binary = "default"
-run = ["run", "{{.Source}}"]
-hook = "stub"
-`
-	r := registryFrom(t, body, Hooks{"stub": stubHook{}})
-	l, _ := r.ByName("hooked")
+func TestCompileLimits(t *testing.T) {
+	r := load(t, map[string]string{"slow": `
+id = 6
+name = "slow"
+source = "main.s"
+run = ["s"]
+env = ["GOMAXPROCS=1"]
 
-	src, bin := l.Files([]byte("Derived\nrest of the source"))
-	if src != "Derived.src" || bin != "Derived" {
-		t.Errorf("hook not consulted: source=%q binary=%q", src, bin)
+[compile_limits]
+memory_extra_mb = 512
+wall_multiplier = 2.0
+`})
+	l, _ := r.ByName("slow")
+	base := baseLimits()
+	got := l.CompileLimits(base)
+	if got.Memory != base.Memory+(512<<20) || got.WallTime != 8*time.Second {
+		t.Errorf("compile limits = %+v", got)
 	}
-
-	// A hook that cannot derive a name falls back to the manifest.
-	if src, bin = l.Files(nil); src != "default.src" || bin != "default" {
-		t.Errorf("fallback failed: source=%q binary=%q", src, bin)
+	if run := l.Limits(base); run != base {
+		t.Error("compile_limits changed the execution limits")
+	}
+	if env := l.Env(); len(env) != 1 || env[0] != "GOMAXPROCS=1" {
+		t.Errorf("env = %v", env)
 	}
 }
 
 func TestLimitMultipliers(t *testing.T) {
-	body := `
-[[language]]
+	r := load(t, map[string]string{"heavy": `
 id = 4
 name = "heavy"
 source = "main.z"
 run = ["z", "{{.Source}}"]
 
-[language.limits]
+[limits]
 memory_extra_mb = 256
 max_processes = 64
 wall_multiplier = 2.0
 cpu_multiplier = 1.5
-`
-	r := registryFrom(t, body, nil)
+`})
 	l, _ := r.ByName("heavy")
 
 	base := baseLimits()
@@ -191,59 +187,53 @@ cpu_multiplier = 1.5
 
 // HeapMB must come from BaseMem, not the ceiling, or the headroom goes to the heap.
 func TestBaseMemoryIsSeparateFromTheCeiling(t *testing.T) {
-	body := `
-[[language]]
+	r := load(t, map[string]string{"heaped": `
 id = 5
 name = "heaped"
 source = "main.h"
 run = ["run", "-Xmx{{.HeapMB}}m", "-ceiling{{.MemMB}}", "-Xss{{.StackKB}}k"]
 
-[language.limits]
+[limits]
 memory_extra_mb = 256
-`
-	r := registryFrom(t, body, nil)
+`})
 	l, _ := r.ByName("heaped")
 
 	base := baseLimits()
-	argv, err := l.RunArgv(Context{
-		Source: "main.h", Limits: l.Limits(base), BaseMem: base.Memory,
-	})
+	argv, err := l.RunArgv(Context{Limits: l.Limits(base), BaseMem: base.Memory})
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "-Xmx256m") {
-		t.Errorf("heap should be the promised 256m: %q", joined)
-	}
-	if !strings.Contains(joined, "-ceiling512") {
-		t.Errorf("ceiling should include the headroom: %q", joined)
-	}
-	if !strings.Contains(joined, "-Xss65536k") {
-		t.Errorf("stack should render in KB: %q", joined)
+	for _, want := range []string{"-Xmx256m", "-ceiling512", "-Xss65536k"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("argv %q should contain %q", joined, want)
+		}
 	}
 }
 
 func TestManifestValidation(t *testing.T) {
+	const valid = "id=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n"
 	tests := []struct {
-		name, toml, want string
+		name  string
+		packs map[string]string
+		want  string
 	}{
-		{"no languages", "", "no languages defined"},
-		{"missing id", "[[language]]\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n", "no id"},
-		{"missing name", "[[language]]\nid=1\nsource=\"a\"\nrun=[\"a\"]\n", "no name"},
-		{"missing source", "[[language]]\nid=1\nname=\"x\"\nrun=[\"a\"]\n", "no source filename"},
-		{"missing run", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\n", "no run command"},
-		{"unknown hook", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\nhook=\"nope\"\n", "unknown hook"},
-		{"unknown key", "[[language]]\nid=1\nname=\"x\"\nsourse=\"a\"\nrun=[\"a\"]\n", "unknown key"},
-		{"duplicate id", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n[[language]]\nid=1\nname=\"y\"\nsource=\"b\"\nrun=[\"b\"]\n", "duplicate id"},
-		{"duplicate name", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n[[language]]\nid=2\nname=\"x\"\nsource=\"b\"\nrun=[\"b\"]\n", "duplicate name"},
-		{"bad template", "[[language]]\nid=1\nname=\"x\"\nsource=\"a\"\nrun=[\"{{.Broken\"]\n", "argv"},
+		{"no packs", map[string]string{}, "no language packs"},
+		{"missing id", map[string]string{"x": "name=\"x\"\nsource=\"a\"\nrun=[\"a\"]\n"}, "no id"},
+		{"missing name", map[string]string{"x": "id=1\nsource=\"a\"\nrun=[\"a\"]\n"}, "no name"},
+		{"missing source", map[string]string{"x": "id=1\nname=\"x\"\nrun=[\"a\"]\n"}, "no source filename"},
+		{"missing run", map[string]string{"x": "id=1\nname=\"x\"\nsource=\"a\"\n"}, "no run command"},
+		{"unknown key", map[string]string{"x": valid + "hook=\"java\"\n"}, "unknown key"},
+		{"relative mount", map[string]string{"x": valid + "mounts=[\"etc/x\"]\n"}, "not absolute"},
+		{"malformed env", map[string]string{"x": valid + "env=[\"NOEQUALS\"]\n"}, "not KEY=VALUE"},
+		{"empty env key", map[string]string{"x": valid + "env=[\"=v\"]\n"}, "not KEY=VALUE"},
+		{"bad template", map[string]string{"x": "id=1\nname=\"x\"\nsource=\"a\"\nrun=[\"{{.Broken\"]\n"}, "argv"},
+		{"duplicate id", map[string]string{"x": valid, "y": "id=1\nname=\"y\"\nsource=\"b\"\nrun=[\"b\"]\n"}, "duplicate id"},
+		{"duplicate name", map[string]string{"x": valid, "y": "id=2\nname=\"x\"\nsource=\"b\"\nrun=[\"b\"]\n"}, "duplicate name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manifests, err := parseManifests([]byte(tt.toml))
-			if err == nil {
-				_, err = newRegistry(manifests, nil)
-			}
+			_, err := LoadRegistry(writePacks(t, tt.packs))
 			if err == nil {
 				t.Fatalf("expected an error mentioning %q", tt.want)
 			}
@@ -252,34 +242,46 @@ func TestManifestValidation(t *testing.T) {
 			}
 		})
 	}
+	if _, err := LoadRegistry(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("a missing directory should error")
+	}
 }
 
-func TestAddingALanguageIsConfigOnly(t *testing.T) {
-	r := registryFrom(t, `
-[[language]]
-id = 60
-name = "go"
-label = "Go"
-source = "main.go"
-binary = "main"
-compile = ["go", "build", "-o", "{{.Binary}}", "{{.Source}}"]
-run = ["./{{.Binary}}"]
-probe = ["go", "version"]
-`, nil)
+func TestShippedPacks(t *testing.T) {
+	r, err := LoadRegistry(filepath.Join("..", "..", "languages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[judge.LanguageID]string{
+		50: "c", 54: "cpp", 60: "go", 62: "java", 63: "javascript", 71: "python", 73: "rust", 74: "typescript",
+	}
+	if len(r.All()) != len(want) {
+		t.Fatalf("got %d languages, want %d", len(r.All()), len(want))
+	}
+	base := baseLimits()
+	for id, name := range want {
+		l, err := r.ByID(id)
+		if err != nil || l.Name() != name {
+			t.Fatalf("id %d: got %v, %v; want %q", id, l, err, name)
+		}
+		ctx := Context{Dir: "/box", Limits: l.Limits(base), BaseMem: base.Memory}
+		for _, render := range []func(Context) ([]string, error){l.CompileArgv, l.RunArgv} {
+			argv, err := render(ctx)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if strings.Contains(strings.Join(argv, " "), "{{") {
+				t.Errorf("%s: unrendered template in %v", name, argv)
+			}
+		}
+	}
 
-	l, err := r.ByName("go")
-	if err != nil {
-		t.Fatal(err)
+	java, _ := r.ByName("java")
+	compile, _ := java.CompileArgv(Context{Limits: base})
+	if _, err := os.Stat(compile[0]); err != nil {
+		t.Errorf("java compile script %s: %v", compile[0], err)
 	}
-	src, bin := l.Files(nil)
-	argv, err := l.RunArgv(Context{Source: src, Binary: bin, Limits: baseLimits()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(argv) != 1 || argv[0] != "./main" {
-		t.Errorf("run argv = %v, want [./main]", argv)
-	}
-	if probe := l.ProbeCommand(); len(probe) != 2 || probe[0] != "go" {
-		t.Errorf("probe = %v", probe)
+	if got := java.Limits(base); got.Memory <= base.Memory || got.MaxProcesses <= base.MaxProcesses {
+		t.Errorf("java needs memory and process headroom above the base limits, got %+v", got)
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +16,6 @@ import (
 	"github.com/JustModo/citron/internal/compare"
 	"github.com/JustModo/citron/internal/judge"
 	"github.com/JustModo/citron/internal/lang"
-	"github.com/JustModo/citron/internal/lang/hooks"
 	"github.com/JustModo/citron/internal/sandbox"
 	"github.com/JustModo/citron/internal/workspace"
 )
@@ -23,7 +24,7 @@ func testRunner(t *testing.T) *Runner {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "configs", "languages.toml"), hooks.All())
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "languages"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +57,17 @@ func execLimits() judge.Limits {
 	}
 }
 
+// requireToolchain skips unless bin is on the PATH submissions see, which is where
+// compilers and pack scripts look for it.
 func requireToolchain(t *testing.T, bin string) {
 	t.Helper()
-	if _, err := exec.LookPath(bin); err != nil {
-		t.Skipf("%s not installed", bin)
+	path, _ := strings.CutPrefix(sandboxEnv[0], "PATH=")
+	for _, dir := range filepath.SplitList(path) {
+		if _, err := exec.LookPath(filepath.Join(dir, bin)); err == nil {
+			return
+		}
 	}
+	t.Skipf("%s not on the sandbox PATH %s", bin, path)
 }
 
 func submit(id string, language judge.LanguageID, source string, cases ...judge.TestCase) judge.Submission {
@@ -180,6 +187,27 @@ public class Main {
         System.out.println(s.nextInt() + s.nextInt());
     }
 }`},
+		{"javascript", "node", 63, `const [a, b] = require("fs").readFileSync(0, "utf8").trim().split(/\s+/).map(Number);
+console.log(a + b);`},
+		{"typescript", "tsc", 74, `import { readFileSync } from "fs";
+const [a, b]: number[] = readFileSync(0, "utf8").trim().split(/\s+/).map(Number);
+console.log(a + b);`},
+		{"go", "go", 60, `package main
+
+import "fmt"
+
+func main() {
+	var a, b int
+	fmt.Scan(&a, &b)
+	fmt.Println(a + b)
+}`},
+		{"rust", "rustc", 73, `use std::io::Read;
+fn main() {
+    let mut s = String::new();
+    std::io::stdin().read_to_string(&mut s).unwrap();
+    let n: Vec<i64> = s.split_whitespace().map(|x| x.parse().unwrap()).collect();
+    println!("{}", n[0] + n[1]);
+}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -197,6 +225,97 @@ public class Main {
 				if r.WallTime <= 0 {
 					t.Errorf("testcase %d has no wall time", r.Index)
 				}
+			}
+		})
+	}
+}
+
+func TestCompileErrors(t *testing.T) {
+	tests := []struct {
+		name, bin string
+		id        judge.LanguageID
+		source    string
+	}{
+		{"javascript", "node", 63, "console.log(("},
+		{"typescript", "tsc", 74, `const x: number = "text";`},
+		{"go", "go", 60, "package main\nfunc main() { undefined() }"},
+		{"rust", "rustc", 73, "fn main() { let x: i32 = \"text\"; }"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requireToolchain(t, tt.bin)
+			res, err := testRunner(t).Run(context.Background(), submit(tt.name, tt.id, tt.source, tc(0, "", "")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Status != judge.StatusCompilationError || len(res.Compile.Output) == 0 {
+				t.Errorf("status = %v, output %q; want a compilation error with diagnostics", res.Status, res.Compile.Output)
+			}
+		})
+	}
+}
+
+// A pack variable replaces a base variable of the same name rather than duplicating it.
+func TestPackEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "id=1\nname=\"x\"\nsource=\"a\"\nrun=[\"a\"]\nenv=[\"PATH=/opt/x/bin\", \"FOO=bar\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "x", lang.ManifestFile), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := lang.LoadRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := registry.ByName("x")
+
+	env := envFor(l)
+	var paths []string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			paths = append(paths, kv)
+		}
+	}
+	if len(paths) != 1 || paths[0] != "PATH=/opt/x/bin" {
+		t.Errorf("PATH entries = %v, want only the pack's", paths)
+	}
+	if !slices.Contains(env, "FOO=bar") || !slices.Contains(env, "HOME=/tmp") {
+		t.Errorf("env = %v", env)
+	}
+}
+
+func TestJavaClassNaming(t *testing.T) {
+	requireToolchain(t, "javac")
+	requireToolchain(t, "javap")
+	tests := []struct {
+		name, source string
+		want         judge.Status
+	}{
+		{"public class not named Main", `
+public class Solution {
+    public static void main(String[] a) { System.out.println(5); }
+}`, judge.StatusAccepted},
+		{"package-private main beside a public class", `
+public class Solution { int answer() { return 5; } }
+class Main {
+    public static void main(String[] a) { System.out.println(new Solution().answer()); }
+}`, judge.StatusAccepted},
+		{"no public class", `
+class Helper {
+    public static void main(String[] a) { System.out.println(5); }
+}`, judge.StatusAccepted},
+		{"no main", `public class Library { }`, judge.StatusCompilationError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := testRunner(t).Run(context.Background(), submit(tt.name, 62, tt.source, tc(0, "", "5")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Status != tt.want {
+				t.Errorf("status = %v, want %v; compile output: %s", res.Status, tt.want, res.Compile.Output)
 			}
 		})
 	}

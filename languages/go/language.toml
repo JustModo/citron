@@ -1,0 +1,10 @@
+id = 60
+name = "go"
+label = "Go"
+source = "main.go"
+binary = "main"
+compile = ["{{.Pack}}/compile.sh", "{{.Source}}"]
+run = ["./{{.Binary}}"]
+probe = ["go", "version"]
+# Without this the runtime starts threads per host core, each counted by max_processes.
+env = ["GOMAXPROCS=1"]
