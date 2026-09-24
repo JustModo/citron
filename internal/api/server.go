@@ -35,6 +35,8 @@ type Server struct {
 	limits    Limits
 	authToken string
 	log       *slog.Logger
+	// inflight bounds submissions buffered in memory at once; nil means unbounded.
+	inflight chan struct{}
 
 	mux *http.ServeMux
 }
@@ -47,6 +49,9 @@ type Options struct {
 	Limits    Limits
 	AuthToken string
 	Logger    *slog.Logger
+	// MaxInFlight bounds submissions read, decoded, queued or run at once; further
+	// requests get 503. Zero means unbounded.
+	MaxInFlight int
 	// MetricsHandler is mounted at /metrics when set.
 	MetricsHandler http.Handler
 }
@@ -61,6 +66,9 @@ func NewServer(opts Options) *Server {
 		authToken: opts.AuthToken,
 		log:       opts.Logger,
 		mux:       http.NewServeMux(),
+	}
+	if opts.MaxInFlight > 0 {
+		s.inflight = make(chan struct{}, opts.MaxInFlight)
 	}
 
 	s.mux.HandleFunc("POST /submissions", s.handleSubmission)
@@ -131,6 +139,15 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 func (s *Server) handleSubmission(w http.ResponseWriter, r *http.Request) {
+	if s.inflight != nil {
+		select {
+		case s.inflight <- struct{}{}:
+			defer func() { <-s.inflight }()
+		default:
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{"citron is at capacity"})
+			return
+		}
+	}
 	c := codec{base64: r.URL.Query().Get("base64_encoded") == "true"}
 
 	// Refuse oversized bodies instead of buffering them.
@@ -203,12 +220,9 @@ func (s *Server) buildSubmission(req submissionRequest, c codec) (judge.Submissi
 		return judge.Submission{}, invalid("source_code exceeds %d bytes", s.limits.MaxSourceBytes)
 	}
 
-	raw := req.Testcases
-	if len(raw) == 0 {
-		return judge.Submission{}, invalid("at least one testcase is required")
-	}
-	if len(raw) > s.limits.MaxTestcases {
-		return judge.Submission{}, invalid("%d testcases exceeds the limit of %d", len(raw), s.limits.MaxTestcases)
+	raw, err := decodeTestcases(req.Testcases, s.limits.MaxTestcases)
+	if err != nil {
+		return judge.Submission{}, err
 	}
 
 	var totalIn, totalOut int64

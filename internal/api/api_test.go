@@ -204,6 +204,61 @@ func TestTooManyTestcasesIsRejected(t *testing.T) {
 	}
 }
 
+// The count limit is enforced while decoding, so a huge array of empty testcases is
+// rejected without materialising it.
+func TestTestcaseArrayIsCappedWhileDecoding(t *testing.T) {
+	testcases, err := decodeTestcases([]byte("["+strings.Repeat("{},", 1_000_000)+"{}]"), 1000)
+	if err == nil || !strings.Contains(err.Error(), "more than 1000") {
+		t.Fatalf("err = %v, want the testcase limit", err)
+	}
+	if testcases != nil {
+		t.Errorf("returned %d testcases", len(testcases))
+	}
+	for _, raw := range []string{`{}`, `"x"`, `null`, `[]`} {
+		if _, err := decodeTestcases([]byte(raw), 1000); !errors.Is(err, errValidation) {
+			t.Errorf("%s: err = %v, want a validation error", raw, err)
+		}
+	}
+}
+
+// blockingSubmitter reports each submission on entered and holds it until released.
+type blockingSubmitter struct{ entered, release chan struct{} }
+
+func (b blockingSubmitter) Submit(context.Context, judge.Submission) (judge.SubmissionResult, error) {
+	b.entered <- struct{}{}
+	<-b.release
+	return judge.SubmissionResult{}, nil
+}
+
+func TestInFlightSubmissionsAreBounded(t *testing.T) {
+	registry, err := lang.LoadRegistry(filepath.Join("..", "..", "languages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := blockingSubmitter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	h := NewServer(Options{
+		Submitter: sub, Registry: registry, MaxInFlight: 1,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Limits: Limits{
+			Execution:    judge.Limits{CPUTime: time.Second, WallTime: time.Second, Memory: 1 << 20},
+			MaxTestcases: 10, MaxSourceBytes: 1 << 20, MaxTotalInput: 1 << 20, MaxTotalOutput: 1 << 20,
+		},
+	}).Handler()
+	body := `{"language_id":71,"source_code":"x","testcases":[{}]}`
+
+	done := make(chan int)
+	go func() { done <- post(t, h, "/submissions", body).Code }()
+	<-sub.entered // the first submission now holds the only slot
+
+	if code := post(t, h, "/submissions", body).Code; code != http.StatusServiceUnavailable {
+		t.Errorf("second submission = %d, want 503", code)
+	}
+	close(sub.release)
+	if code := <-done; code != http.StatusCreated {
+		t.Errorf("first submission = %d, want 201", code)
+	}
+}
+
 func TestRequestedLimitsAreClamped(t *testing.T) {
 	sub := &fakeSubmitter{}
 	h := newTestServer(t, sub)

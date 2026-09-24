@@ -3,7 +3,7 @@ set -e
 
 CG=/sys/fs/cgroup
 V1_CONTROLLERS="memory pids cpuacct cpu,cpuacct cpu cpuset"
-V1_REQUIRED="memory pids"
+V1_REQUIRED="memory pids cpu cpuacct"
 
 make_writable() {
     mount -o remount,rw "$1" 2>/dev/null ||

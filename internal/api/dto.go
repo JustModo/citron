@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,10 +13,12 @@ import (
 
 // submissionRequest is one source and its testcases, compiled once.
 type submissionRequest struct {
-	LanguageID int               `json:"language_id"`
-	Language   string            `json:"language"`
-	SourceCode string            `json:"source_code"`
-	Testcases  []testcaseRequest `json:"testcases"`
+	LanguageID int    `json:"language_id"`
+	Language   string `json:"language"`
+	SourceCode string `json:"source_code"`
+	// Testcases is decoded by decodeTestcases, which enforces the count limit
+	// before allocating elements.
+	Testcases json.RawMessage `json:"testcases"`
 
 	// Optional limits, clamped to the configured maximums.
 	CPUTimeLimit  float64 `json:"cpu_time_limit"`
@@ -25,6 +29,33 @@ type submissionRequest struct {
 type testcaseRequest struct {
 	Stdin          string `json:"stdin"`
 	ExpectedOutput string `json:"expected_output"`
+}
+
+// decodeTestcases decodes the testcases array one element at a time and stops as
+// soon as it exceeds max, so an oversized array is never materialised.
+func decodeTestcases(raw json.RawMessage, max int) ([]testcaseRequest, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, invalid("at least one testcase is required")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+		return nil, invalid("testcases must be an array")
+	}
+	var out []testcaseRequest
+	for dec.More() {
+		if len(out) == max {
+			return nil, invalid("more than %d testcases", max)
+		}
+		var tc testcaseRequest
+		if err := dec.Decode(&tc); err != nil {
+			return nil, invalid("testcase %d: %s", len(out), err)
+		}
+		out = append(out, tc)
+	}
+	if len(out) == 0 {
+		return nil, invalid("at least one testcase is required")
+	}
+	return out, nil
 }
 
 type statusDTO struct {

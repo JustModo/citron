@@ -29,10 +29,14 @@ func (m *managerV2) New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup
 			return nil, err
 		}
 		// Without this a memory bomb swaps instead of being OOM-killed.
-		if err := c.write("memory.swap.max", "0"); err != nil && !os.IsNotExist(err) {
+		if err := c.write("memory.swap.max", "0"); err != nil {
 			c.remove()
 			return nil, err
 		}
+	}
+	if err := c.write("cpu.max", fmt.Sprintf("%d %d", cpuPeriodUS, cpuPeriodUS)); err != nil {
+		c.remove()
+		return nil, err
 	}
 	if maxPIDs > 0 {
 		if err := c.write("pids.max", strconv.Itoa(maxPIDs)); err != nil {

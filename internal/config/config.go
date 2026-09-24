@@ -29,6 +29,9 @@ type Server struct {
 	ReadTimeoutSec  float64 `toml:"read_timeout_seconds"`
 	WriteTimeoutSec float64 `toml:"write_timeout_seconds"`
 	ShutdownSec     float64 `toml:"shutdown_grace_seconds"`
+	// MaxInFlight bounds submissions being read, decoded, queued or run at once, so
+	// request buffering cannot outgrow process memory.
+	MaxInFlight int `toml:"max_inflight_submissions"`
 	// AuthToken, when set, is required in the X-Judge-Token header. Empty disables
 	// the check, so the service must then be reachable only on a private network.
 	AuthToken string `toml:"auth_token"`
@@ -44,6 +47,9 @@ type Sandbox struct {
 	WorkspaceRoot    string `toml:"workspace_root"`
 	CacheRoot        string `toml:"cache_root"`
 	CacheEntries     int    `toml:"cache_entries"`
+	// CacheMB bounds the bytes the compile cache keeps on the filesystem it shares
+	// with workspaces.
+	CacheMB int64 `toml:"cache_mb"`
 
 	// ReadOnly and Symlinks ("target:link") build the filesystem a submission sees.
 	ReadOnly []string `toml:"readonly_paths"`
@@ -86,10 +92,13 @@ type CompileLimits struct {
 
 // SubmissionLimits bound a whole submission.
 type SubmissionLimits struct {
-	MaxTestcases         int     `toml:"max_testcases"`
-	MaxSourceMB          int64   `toml:"max_source_mb"`
-	MaxTotalInputMB      int64   `toml:"max_total_input_mb"`
-	MaxTotalOutputMB     int64   `toml:"max_total_output_mb"`
+	MaxTestcases     int   `toml:"max_testcases"`
+	MaxSourceMB      int64 `toml:"max_source_mb"`
+	MaxTotalInputMB  int64 `toml:"max_total_input_mb"`
+	MaxTotalOutputMB int64 `toml:"max_total_output_mb"`
+	// MaxReturnedOutputMB bounds the program output kept and returned for one
+	// submission; output past it is dropped and flagged as truncated.
+	MaxReturnedOutputMB  int64   `toml:"max_returned_output_mb"`
 	MaxParallelTestcases int     `toml:"max_parallel_testcases"`
 	MaxTotalWallTimeSec  float64 `toml:"max_total_wall_time_seconds"`
 }
@@ -170,6 +179,7 @@ func Default() Config {
 			ReadTimeoutSec:  30,
 			WriteTimeoutSec: 60,
 			ShutdownSec:     20,
+			MaxInFlight:     8,
 		},
 		Sandbox: Sandbox{
 			Driver:        "nsjail",
@@ -178,6 +188,7 @@ func Default() Config {
 			WorkspaceRoot: "/box",
 			CacheRoot:     "/box/cache",
 			CacheEntries:  256,
+			CacheMB:       512,
 			ReadOnly:      []string{"/usr", "/etc/alternatives"},
 			Symlinks:      []string{"/usr/bin:/bin", "/usr/lib:/lib", "/usr/lib64:/lib64", "/usr/sbin:/sbin"},
 			TmpfsMB:       64,
@@ -196,6 +207,7 @@ func Default() Config {
 			Submission: SubmissionLimits{
 				MaxTestcases: 1000, MaxSourceMB: 1,
 				MaxTotalInputMB: 32, MaxTotalOutputMB: 32,
+				MaxReturnedOutputMB:  16,
 				MaxParallelTestcases: 4,
 				// Below the client's 45 s timeout.
 				MaxTotalWallTimeSec: 30,
@@ -259,6 +271,11 @@ func (c Config) Validate() error {
 		{c.Sandbox.Driver != "local" || c.Sandbox.AllowUnsafeLocal,
 			`sandbox.driver = "local" does not isolate untrusted code; set sandbox.allow_unsafe_local = true to accept that`},
 		{c.Sandbox.WorkspaceRoot != "", "sandbox.workspace_root is required"},
+		{c.Sandbox.CacheMB > 0, "sandbox.cache_mb must be > 0"},
+		{c.Limits.Submission.MaxReturnedOutputMB > 0, "limits.submission.max_returned_output_mb must be > 0"},
+		// Fewer in-flight requests than submission slots would leave slots idle.
+		{c.Server.MaxInFlight >= c.Scheduler.MaxConcurrentSubmissions,
+			"server.max_inflight_submissions must be >= scheduler.max_concurrent_submissions"},
 		{c.Limits.Submission.MaxTestcases > 0, "limits.submission.max_testcases must be > 0"},
 		{c.Limits.Submission.MaxParallelTestcases > 0, "limits.submission.max_parallel_testcases must be > 0"},
 		{c.Limits.Submission.MaxTotalWallTimeSec > 0, "limits.submission.max_total_wall_time_seconds must be > 0"},

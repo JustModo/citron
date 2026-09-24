@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -33,7 +34,7 @@ func testRunner(t *testing.T) *Runner {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache, err := NewCompileCache(filepath.Join(root, "cache"), 32)
+	cache, err := NewCompileCache(filepath.Join(root, "cache"), 32, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,5 +450,77 @@ func TestWorkspacesAreCleanedUp(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("%d workspaces left behind: %v", len(entries), entries)
+	}
+}
+
+// fakeSandbox completes compiles only if their context stays live for the compile
+// duration, and echoes a fixed output for runs.
+type fakeSandbox struct {
+	compileTime time.Duration
+	output      []byte
+}
+
+func (f fakeSandbox) Name() string { return "fake" }
+
+func (f fakeSandbox) Run(ctx context.Context, spec sandbox.Spec) (sandbox.Result, error) {
+	if spec.Stdin == nil && f.compileTime > 0 {
+		select {
+		case <-time.After(f.compileTime):
+			return sandbox.Result{}, nil
+		case <-ctx.Done():
+			return sandbox.Result{TimedOut: true}, nil
+		}
+	}
+	return sandbox.Result{Stdout: f.output}, nil
+}
+
+func fakeRunner(t *testing.T, sb sandbox.Sandbox, maxOutput int64) *Runner {
+	t.Helper()
+	r := testRunner(t)
+	r.sandbox = sb
+	r.opts.MaxReturnedOutput = maxOutput
+	return r
+}
+
+// A client that disconnects mid-compile must not leave a cached compile failure for
+// the next client with the same source.
+func TestCancelledCompileIsNotCached(t *testing.T) {
+	r := fakeRunner(t, fakeSandbox{compileTime: 200 * time.Millisecond, output: []byte("5\n")}, 0)
+	src := "int main(){}"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, _ = r.Run(ctx, submit("a", 50, src, tc(0, "", "5")))
+
+	res, err := r.Run(context.Background(), submit("b", 50, src, tc(0, "", "5")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Compile.Success || res.Status != judge.StatusAccepted {
+		t.Errorf("second client got %v, compile output %q", res.Status, res.Compile.Output)
+	}
+}
+
+// Program output kept for one submission is bounded in aggregate, not just per testcase.
+func TestReturnedOutputIsBoundedPerSubmission(t *testing.T) {
+	out := bytes.Repeat([]byte("x"), 1000)
+	r := fakeRunner(t, fakeSandbox{output: out}, 2500)
+	cases := make([]judge.TestCase, 5)
+	for i := range cases {
+		cases[i] = tc(i, "", string(out))
+	}
+	res, err := r.Run(context.Background(), submit("o", 71, "print()", cases...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept int
+	for _, c := range res.TestCases {
+		kept += len(c.Stdout)
+		if c.Status != judge.StatusAccepted {
+			t.Errorf("testcase %d: %v; dropping output must not change the verdict", c.Index, c.Status)
+		}
+	}
+	if kept > 2500 {
+		t.Errorf("kept %d bytes of output, budget is 2500", kept)
 	}
 }

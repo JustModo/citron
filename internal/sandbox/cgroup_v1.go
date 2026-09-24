@@ -23,11 +23,16 @@ func (*managerV1) Version() string { return "v1" }
 
 func (m *managerV1) New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup, error) {
 	c := &cgroupV1{dirs: make(map[string]string, len(m.dirs))}
+	made := make(map[string]bool, len(m.dirs))
 	for controller, parent := range m.dirs {
 		dir := filepath.Join(parent, name)
-		if err := os.Mkdir(dir, 0o755); err != nil {
-			c.remove()
-			return nil, fmt.Errorf("cgroup: %w", err)
+		// Co-mounted controllers (cpu,cpuacct) share one directory.
+		if !made[dir] {
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				c.remove()
+				return nil, fmt.Errorf("cgroup: %w", err)
+			}
+			made[dir] = true
 		}
 		c.dirs[controller] = dir
 	}
@@ -38,8 +43,8 @@ func (m *managerV1) New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup
 			c.remove()
 			return nil, err
 		}
-		// memsw exists only with swap accounting; it keeps swap from bypassing the limit.
-		if err := c.write("memory", "memory.memsw.limit_in_bytes", limit); err != nil && !os.IsNotExist(err) {
+		// Keeps swap from bypassing the limit; hosts without swap accounting fail here.
+		if err := c.write("memory", "memory.memsw.limit_in_bytes", limit); err != nil {
 			c.remove()
 			return nil, err
 		}
@@ -49,6 +54,15 @@ func (m *managerV1) New(name string, mem judge.MemoryBytes, maxPIDs int) (cgroup
 			c.remove()
 			return nil, err
 		}
+	}
+	period := strconv.Itoa(cpuPeriodUS)
+	if err := c.write("cpu", "cpu.cfs_period_us", period); err != nil {
+		c.remove()
+		return nil, err
+	}
+	if err := c.write("cpu", "cpu.cfs_quota_us", period); err != nil {
+		c.remove()
+		return nil, err
 	}
 	return c, nil
 }

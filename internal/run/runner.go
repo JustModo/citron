@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,6 +26,8 @@ type Options struct {
 	CompileLimits   judge.Limits
 	MaxParallel     int
 	SubmissionLimit time.Duration
+	// MaxReturnedOutput bounds the program output kept for one submission, in bytes.
+	MaxReturnedOutput int64
 	// Observer may be nil to disable metrics.
 	Observer Observer
 }
@@ -130,6 +133,7 @@ func (r *Runner) Run(ctx context.Context, sub judge.Submission) (judge.Submissio
 	if err != nil {
 		return judge.SubmissionResult{}, err
 	}
+	defer r.cache.Release(compiled)
 
 	result := judge.SubmissionResult{ID: sub.ID, Compile: compiled.Result}
 	if !compiled.Result.Skipped && !compiled.Result.Success {
@@ -191,8 +195,11 @@ func (r *Runner) compile(
 		}
 		defer release()
 
+		// The result is shared through the cache, so once admitted the compile runs to
+		// its own deadline rather than this request's: a disconnect must not be cached
+		// as a timeout.
 		started := time.Now()
-		res, err := r.sandbox.Run(ctx, sandbox.Spec{
+		res, err := r.sandbox.Run(context.WithoutCancel(ctx), sandbox.Spec{
 			Dir: dir, ReadOnly: language.Mounts(), Argv: argv, Env: envFor(language),
 			Limits: limits,
 		})
@@ -229,6 +236,8 @@ func (r *Runner) runTestCases(
 	}
 
 	results := make([]judge.TestCaseResult, len(sub.TestCases))
+	var outputBudget atomic.Int64
+	outputBudget.Store(r.opts.MaxReturnedOutput)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(r.opts.MaxParallel)
 
@@ -243,6 +252,11 @@ func (r *Runner) runTestCases(
 					Index: tc.Index, Status: judge.StatusSystemError,
 					Message: "sandbox failure",
 				}
+			}
+			if r.opts.MaxReturnedOutput > 0 && outputBudget.Add(-int64(len(res.Stdout)+len(res.Stderr))) < 0 {
+				res.Stdout, res.Stderr = nil, nil
+				res.StdoutTruncated, res.StderrTruncated = true, true
+				res.Message = "output omitted: submission output limit reached"
 			}
 			results[i] = res
 			return nil

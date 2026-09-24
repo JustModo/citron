@@ -94,7 +94,7 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 		log.Warn("could not sweep stale workspaces", "error", err)
 	}
 
-	cache, err := run.NewCompileCache(cfg.Sandbox.CacheRoot, cfg.Sandbox.CacheEntries)
+	cache, err := run.NewCompileCache(cfg.Sandbox.CacheRoot, cfg.Sandbox.CacheEntries, cfg.Sandbox.CacheMB<<20)
 	if err != nil {
 		return err
 	}
@@ -102,10 +102,11 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 	metrics := metrics.New()
 	admitter := sched.NewAdmitter(cfg.Scheduler.MemoryBudgetMB, cfg.Scheduler.ExecutionSlots)
 	runner := run.NewRunner(registry, sb, workspaces, cache, compare.Default(), admitter, run.Options{
-		CompileLimits:   cfg.CompileLimits(),
-		MaxParallel:     cfg.Limits.Submission.MaxParallelTestcases,
-		SubmissionLimit: cfg.SubmissionDeadline(),
-		Observer:        metrics,
+		CompileLimits:     cfg.CompileLimits(),
+		MaxParallel:       cfg.Limits.Submission.MaxParallelTestcases,
+		MaxReturnedOutput: cfg.Limits.Submission.MaxReturnedOutputMB << 20,
+		SubmissionLimit:   cfg.SubmissionDeadline(),
+		Observer:          metrics,
 	}, log)
 	scheduler := sched.NewScheduler(runner, cfg.Scheduler.MaxConcurrentSubmissions, cfg.QueueWait())
 
@@ -118,6 +119,7 @@ func runCitron(configPath string, showLanguages bool, address string) error {
 		Registry:       registry,
 		Health:         &health{scheduler: scheduler},
 		AuthToken:      cfg.Server.AuthToken,
+		MaxInFlight:    cfg.Server.MaxInFlight,
 		Logger:         log,
 		MetricsHandler: metrics.Handler(),
 		Limits: api.Limits{

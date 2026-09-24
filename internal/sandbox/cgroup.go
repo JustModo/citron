@@ -41,8 +41,14 @@ type cgroupManager interface {
 var v1Hierarchies = []struct{ controller, probeFile string }{
 	{"memory", "memory.limit_in_bytes"},
 	{"pids", "pids.max"},
+	{"cpu", "cpu.cfs_quota_us"},
 	{"cpuacct", "cpuacct.usage"},
 }
+
+// cpuPeriodUS is the CFS period; each execution may use one period of CPU time per
+// period, i.e. one CPU, so a multi-process submission cannot drain CPU shared with
+// concurrent executions.
+const cpuPeriodUS = 100000
 
 // newCgroupManager picks a backend, preferring v2, and fails if neither hierarchy
 // has the required controllers delegated, so limits are never silently unenforced.
@@ -59,7 +65,7 @@ func newCgroupManager(root string) (cgroupManager, error) {
 
 	var v2Err error
 	if unified != "" && within(unified, root) {
-		if v2Err = probeCgroup(root, "memory.max", "pids.max", "cpu.stat"); v2Err == nil {
+		if v2Err = probeCgroup(root, "memory.max", "pids.max", "cpu.max", "cpu.stat"); v2Err == nil {
 			return &managerV2{root: root}, nil
 		}
 	}

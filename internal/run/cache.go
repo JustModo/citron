@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,24 +22,30 @@ import (
 // CompileCache stores compiled artifacts on disk, keyed by language, source and
 // compile argv. Failed compilations are cached too, so a resubmitted source with a
 // compile error is not recompiled for every request.
+//
+// The cache is bounded by entry count and by total bytes, since it shares its
+// filesystem with testcase workspaces. Entries in use by a running submission are
+// pinned and never evicted.
 type CompileCache struct {
 	root       string
 	maxEntries int
+	maxBytes   int64
 
-	sf singleflight.Group
-	mu sync.Mutex
+	sf     singleflight.Group
+	mu     sync.Mutex
+	pinned map[string]int
 }
 
 // NewCompileCache creates a cache rooted at root holding at most maxEntries entries
-// (128 if maxEntries is not positive).
-func NewCompileCache(root string, maxEntries int) (*CompileCache, error) {
-	if maxEntries <= 0 {
-		maxEntries = 128
+// and maxBytes bytes of artifacts.
+func NewCompileCache(root string, maxEntries int, maxBytes int64) (*CompileCache, error) {
+	if maxEntries <= 0 || maxBytes <= 0 {
+		return nil, fmt.Errorf("compile cache: entry and byte limits must be positive")
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("compile cache: %w", err)
 	}
-	return &CompileCache{root: root, maxEntries: maxEntries}, nil
+	return &CompileCache{root: root, maxEntries: maxEntries, maxBytes: maxBytes, pinned: map[string]int{}}, nil
 }
 
 // Key returns the cache key for a compilation. Every input that affects the output
@@ -62,12 +69,39 @@ type cachedMeta struct {
 type Entry struct {
 	Dir    string
 	Result judge.CompileResult
+	key    string
 }
 
 // Build returns the cached compilation for key, running build exactly once for
 // concurrent callers that miss. build must place its artifacts in the directory it
 // is given; that directory becomes the cache entry only if build returns no error.
+// The returned entry is pinned against eviction until passed to Release.
 func (c *CompileCache) Build(key string, build func(dir string) (judge.CompileResult, error)) (Entry, error) {
+	c.mu.Lock()
+	c.pinned[key]++
+	c.mu.Unlock()
+	e, err := c.get(key, build)
+	if err != nil {
+		c.Release(Entry{key: key})
+		return Entry{}, err
+	}
+	e.key = key
+	return e, nil
+}
+
+// Release unpins an entry returned by Build.
+func (c *CompileCache) Release(e Entry) {
+	if e.key == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pinned[e.key]--; c.pinned[e.key] <= 0 {
+		delete(c.pinned, e.key)
+	}
+}
+
+func (c *CompileCache) get(key string, build func(dir string) (judge.CompileResult, error)) (Entry, error) {
 	if e, ok := c.lookup(key); ok {
 		return e, nil
 	}
@@ -129,6 +163,9 @@ func (c *CompileCache) build(key string, build func(dir string) (judge.CompileRe
 
 	result, err := build(staging)
 	if err == nil {
+		err = c.capEntrySize(staging, &result)
+	}
+	if err == nil {
 		err = os.Chmod(staging, 0o755)
 	}
 	if err != nil {
@@ -163,7 +200,32 @@ func (c *CompileCache) build(key string, build func(dir string) (judge.CompileRe
 	return Entry{Dir: final, Result: result}, nil
 }
 
-// evict drops the least recently used entries once the cache exceeds its size.
+// capEntrySize turns a compilation whose output exceeds a quarter of the byte budget
+// into a failed one and discards its artifacts, so no single entry can crowd out the
+// rest of the cache. The result is deterministic for the source, so it is cached.
+func (c *CompileCache) capEntrySize(dir string, result *judge.CompileResult) error {
+	limit := c.maxBytes / 4
+	if dirSize(dir) <= limit {
+		return nil
+	}
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("compile cache: %w", err)
+	}
+	for _, f := range files {
+		if err := os.RemoveAll(filepath.Join(dir, f.Name())); err != nil {
+			return fmt.Errorf("compile cache: %w", err)
+		}
+	}
+	*result = judge.CompileResult{
+		Output:   fmt.Appendf(nil, "compiled output exceeds %d MiB", limit>>20),
+		Duration: result.Duration,
+	}
+	return nil
+}
+
+// evict drops unpinned entries, least recently used first, until the cache is
+// within both its entry count and its byte budget.
 func (c *CompileCache) evict() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -173,10 +235,12 @@ func (c *CompileCache) evict() {
 		return
 	}
 	type aged struct {
-		path string
+		key  string
 		at   time.Time
+		size int64
 	}
 	var dirs []aged
+	var total int64
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), "building-") {
 			continue
@@ -185,15 +249,38 @@ func (c *CompileCache) evict() {
 		if err != nil {
 			continue
 		}
-		dirs = append(dirs, aged{filepath.Join(c.root, e.Name()), info.ModTime()})
-	}
-	if len(dirs) <= c.maxEntries {
-		return
+		size := dirSize(filepath.Join(c.root, e.Name()))
+		total += size
+		dirs = append(dirs, aged{e.Name(), info.ModTime(), size})
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].at.Before(dirs[j].at) })
-	for _, d := range dirs[:len(dirs)-c.maxEntries] {
-		_ = os.RemoveAll(d.path)
+	count := len(dirs)
+	for _, d := range dirs {
+		if count <= c.maxEntries && total <= c.maxBytes {
+			return
+		}
+		if c.pinned[d.key] > 0 {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(c.root, d.key)) == nil {
+			count--
+			total -= d.size
+		}
 	}
+}
+
+// dirSize sums the sizes of the regular files under dir without following links.
+func dirSize(dir string) int64 {
+	var n int64
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if info, err := d.Info(); err == nil {
+				n += info.Size()
+			}
+		}
+		return nil
+	})
+	return n
 }
 
 // CopyInto copies an entry's artifacts into a testcase workspace. Copying rather

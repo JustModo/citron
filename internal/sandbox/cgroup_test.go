@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -136,5 +138,35 @@ func TestCgroupNumber(t *testing.T) {
 		if got != tc.want || ok != tc.wantOK {
 			t.Errorf("cgroupNumber(%q) = %d, %v; want %d, %v", tc.in, got, ok, tc.want, tc.wantOK)
 		}
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Each execution is capped at one CPU so a forking submission cannot starve a
+// concurrent execution. Plain directories stand in for cgroupfs.
+func TestExecutionCgroupsCapCPU(t *testing.T) {
+	root := t.TempDir()
+	if _, err := (&managerV2{root: root}).New("exec", 64<<20, 32); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(root, "exec", "cpu.max")); got != "100000 100000" {
+		t.Errorf("v2 cpu.max = %q", got)
+	}
+
+	mem, pids, cpu := t.TempDir(), t.TempDir(), t.TempDir()
+	v1 := &managerV1{dirs: map[string]string{"memory": mem, "pids": pids, "cpu": cpu, "cpuacct": cpu}}
+	if _, err := v1.New("exec", 64<<20, 32); err != nil {
+		t.Fatalf("co-mounted cpu,cpuacct: %v", err)
+	}
+	if got := readFile(t, filepath.Join(cpu, "exec", "cpu.cfs_quota_us")); got != "100000" {
+		t.Errorf("v1 cpu.cfs_quota_us = %q", got)
 	}
 }
